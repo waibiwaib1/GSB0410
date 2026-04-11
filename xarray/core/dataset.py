@@ -365,7 +365,7 @@ class DataVariables(Mapping[Any, "DataArray"]):
         )
 
     def __len__(self) -> int:
-        return len(self._dataset._variables) - len(self._dataset._coord_names)
+        return len(set(self._dataset._variables) - self._dataset._coord_names)
 
     def __contains__(self, key: Hashable) -> bool:
         return key in self._dataset._variables and key not in self._dataset._coord_names
@@ -4053,9 +4053,9 @@ class Dataset(
                     self.xindexes.get_all_coords(k, errors="ignore")
                 )
 
-            drop_variables += var_names
-
             if len(var_names) == 1 and (not append or dim not in self._indexes):
+                # 单级索引：删除原来的变量
+                drop_variables += var_names
                 var_name = var_names[0]
                 var = self._variables[var_name]
                 if var.dims != (dim,):
@@ -4066,6 +4066,7 @@ class Dataset(
                 idx = PandasIndex.from_variables({dim: var})
                 idx_vars = idx.create_variables({var_name: var})
             else:
+                # 多级索引：保留原来的变量！
                 if append:
                     current_variables = {
                         k: self._variables[k] for k in current_coord_names
@@ -4141,19 +4142,64 @@ class Dataset(
 
         drop_indexes: list[Hashable] = []
         drop_variables: list[Hashable] = []
-        replaced_indexes: list[PandasMultiIndex] = []
         new_indexes: dict[Hashable, Index] = {}
         new_variables: dict[Hashable, IndexVariable] = {}
-
+        
+        # 收集所有需要处理的索引对象，确保每个只处理一次
+        indexes_to_process: dict[int, tuple] = {}
+        
         for name in dims_or_levels:
             index = self._indexes[name]
-            drop_indexes += list(self.xindexes.get_all_coords(name))
-
-            if isinstance(index, PandasMultiIndex) and name not in self.dims:
-                # special case for pd.MultiIndex (name is an index level):
-                # replace by a new index with dropped level(s) instead of just drop the index
-                if index not in replaced_indexes:
-                    level_names = index.index.names
+            index_id = id(index)
+            
+            # 获取这个索引的所有关联坐标
+            all_coords = list(self.xindexes.get_all_coords(name))
+            drop_indexes += all_coords
+            
+            # 判断这是一个完整的索引（维度名）还是一个层级
+            if isinstance(index, PandasMultiIndex):
+                if name in self.dims:
+                    # 这是一个完整的多级索引（维度名）
+                    indexes_to_process[index_id] = (index, 'full', all_coords)
+                else:
+                    # 这是一个多级索引的某个层级
+                    indexes_to_process[index_id] = (index, 'level', all_coords)
+            else:
+                # 这是一个单级索引
+                indexes_to_process[index_id] = (index, 'full', all_coords)
+        
+        # 现在处理每个索引对象（只处理一次）
+        for index, process_type, all_coords in indexes_to_process.values():
+            if isinstance(index, PandasMultiIndex):
+                # 找到这个索引的所有层级名
+                level_names = index.index.names
+                # 找出哪些层级需要被重置（在 dims_or_levels 中）
+                levels_to_reset = [k for k in level_names if k in dims_or_levels]
+                
+                if process_type == 'full' or len(levels_to_reset) == len(level_names):
+                    # 重置整个索引
+                    if not drop:
+                        # 把所有层级保留为普通坐标
+                        for level_name in level_names:
+                            if level_name in self._variables:
+                                new_variables[level_name] = self._variables[level_name]
+                                drop_variables.append(level_name)
+                    # 同时也要删除索引本身的坐标
+                    drop_variables.append(index.dim)
+                else:
+                    # 只重置部分层级
+                    if drop:
+                        # 删除这些层级的坐标
+                        for level_name in levels_to_reset:
+                            drop_variables.append(level_name)
+                    else:
+                        # 保留这些层级为普通坐标
+                        for level_name in levels_to_reset:
+                            if level_name in self._variables:
+                                new_variables[level_name] = self._variables[level_name]
+                                drop_variables.append(level_name)
+                    
+                    # 保留剩下的层级
                     level_vars = {
                         k: self._variables[k]
                         for k in level_names
@@ -4164,9 +4210,12 @@ class Dataset(
                         idx_vars = idx.create_variables(level_vars)
                         new_indexes.update({k: idx for k in idx_vars})
                         new_variables.update(idx_vars)
-                replaced_indexes.append(index)
-
-            if drop:
+            else:
+                # 单级索引
+                if not drop:
+                    # 保留为普通坐标
+                    if name in self._variables:
+                        new_variables[name] = self._variables[name]
                 drop_variables.append(name)
 
         indexes = {k: v for k, v in self._indexes.items() if k not in drop_indexes}
@@ -4177,7 +4226,7 @@ class Dataset(
         }
         variables.update(new_variables)
 
-        coord_names = set(new_variables) | self._coord_names
+        coord_names = (set(new_variables) | self._coord_names) - set(drop_variables)
 
         return self._replace(variables, coord_names=coord_names, indexes=indexes)
 

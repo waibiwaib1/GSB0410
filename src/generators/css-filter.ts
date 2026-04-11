@@ -186,18 +186,19 @@ export function getInversionFixesFor(url: string, fixes: string, index: SiteProp
         },
     });
 
+    const genericFixIndex = inversionFixes.findIndex((fix) => fix.url[0] === '*');
+    const genericFix = inversionFixes[genericFixIndex >= 0 ? genericFixIndex : 0];
     const common = {
-        url: inversionFixes[0].url,
-        invert: inversionFixes[0].invert || [],
-        noinvert: inversionFixes[0].noinvert || [],
-        removebg: inversionFixes[0].removebg || [],
-        css: inversionFixes[0].css || '',
+        url: genericFix.url,
+        invert: genericFix.invert || [],
+        noinvert: genericFix.noinvert || [],
+        removebg: genericFix.removebg || [],
+        css: genericFix.css || '',
     };
 
     if (url) {
-        // Search for match with given URL
         const matches = inversionFixes
-            .slice(1)
+            .filter((_, i) => i !== genericFixIndex)
             .filter((s) => isURLInList(url, s.url))
             .sort((a, b) => b.url[0].length - a.url[0].length);
         if (matches.length > 0) {

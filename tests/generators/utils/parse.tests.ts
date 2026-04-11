@@ -393,3 +393,52 @@ test('Implied wildcards', () => {
             'directive': 'one'
         }]);
 });
+
+test('Base64 padding in CSS does not break parsing', () => {
+    interface TestFix {
+        url: string[];
+        css: string;
+    }
+
+    const directiveMap: { [key: string]: keyof TestFix } = {
+        CSS: 'css',
+    };
+
+    const config = [
+        '*',
+        '',
+        'CSS',
+        'div { color: red; }',
+        '',
+        '====================',
+        '',
+        'thisisnotarealwebsite.dummy',
+        '',
+        'CSS',
+        '.Not-A-Real-Selector {',
+        "  not-a-real-CSS-property: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAFklEQVQImWO84ePDwMCQ8uEDEwMMAAA1TAO4kytpLAAAAABJRU5ErkJggg==') !important;",
+        '}',
+        '',
+        'IGNORE INLINE STYLE',
+        '.test',
+        ''
+    ].join('\n');
+
+    const options: SitesFixesParserOptions<TestFix> = {
+        commands: Object.keys(directiveMap),
+        getCommandPropName: (command) => directiveMap[command],
+        parseCommandValue: (_, value) => value.trim(),
+    };
+    const index = indexSitesFixesConfig<TestFix>(config);
+
+    const fixesGeneric = getSitesFixesFor('example.com', config, index, options);
+    expect(fixesGeneric).toEqual([{
+        'url': ['*'],
+        'css': 'div { color: red; }',
+    }]);
+
+    const keys = Object.keys(index.domainPatterns);
+    for (const key of keys) {
+        expect(key).not.toContain("') !important;");
+    }
+});

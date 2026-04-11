@@ -46,7 +46,15 @@ const TabScrollButtonRoot = styled(ButtonBase, {
 
 const TabScrollButton = React.forwardRef(function TabScrollButton(inProps, ref) {
   const props = useThemeProps({ props: inProps, name: 'MuiTabScrollButton' });
-  const { className, direction, orientation, disabled, ...other } = props;
+  const {
+    className,
+    direction,
+    orientation,
+    disabled,
+    components = {},
+    slots = {},
+    ...other
+  } = props;
 
   const theme = useTheme();
   const isRtl = theme.direction === 'rtl';
@@ -54,6 +62,10 @@ const TabScrollButton = React.forwardRef(function TabScrollButton(inProps, ref) 
   const ownerState = { isRtl, ...props };
 
   const classes = useUtilityClasses(ownerState);
+
+  const StartIcon = direction === 'left'
+    ? slots.leftIcon || components.leftIcon || KeyboardArrowLeft
+    : slots.rightIcon || components.rightIcon || KeyboardArrowRight;
 
   return (
     <TabScrollButtonRoot
@@ -65,11 +77,7 @@ const TabScrollButton = React.forwardRef(function TabScrollButton(inProps, ref) 
       tabIndex={null}
       {...other}
     >
-      {direction === 'left' ? (
-        <KeyboardArrowLeft fontSize="small" />
-      ) : (
-        <KeyboardArrowRight fontSize="small" />
-      )}
+      <StartIcon fontSize="small" />
     </TabScrollButtonRoot>
   );
 });
@@ -92,6 +100,18 @@ TabScrollButton.propTypes /* remove-proptypes */ = {
    */
   className: PropTypes.string,
   /**
+   * The components used for each slot inside.
+   *
+   * This prop is an alias for the `slots` prop.
+   * It's recommended to use the `slots` prop instead.
+   *
+   * @default {}
+   */
+  components: PropTypes.shape({
+    leftIcon: PropTypes.elementType,
+    rightIcon: PropTypes.elementType,
+  }),
+  /**
    * The direction the button should indicate.
    */
   direction: PropTypes.oneOf(['left', 'right']).isRequired,
@@ -103,6 +123,17 @@ TabScrollButton.propTypes /* remove-proptypes */ = {
    * The component orientation (layout flow direction).
    */
   orientation: PropTypes.oneOf(['horizontal', 'vertical']).isRequired,
+  /**
+   * The components used for each slot inside.
+   *
+   * This prop is an alias for the `components` prop, which will be deprecated in the future.
+   *
+   * @default {}
+   */
+  slots: PropTypes.shape({
+    leftIcon: PropTypes.elementType,
+    rightIcon: PropTypes.elementType,
+  }),
   /**
    * The system prop that allows defining system overrides as well as additional CSS styles.
    */

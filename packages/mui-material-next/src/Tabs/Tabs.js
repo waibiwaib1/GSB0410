@@ -175,6 +175,7 @@ const Tabs = React.forwardRef(function Tabs(inProps, ref) {
     children,
     className,
     component = 'div',
+    components = {},
     allowScrollButtonsMobile = false,
     indicatorColor = 'primary',
     onChange,
@@ -182,6 +183,7 @@ const Tabs = React.forwardRef(function Tabs(inProps, ref) {
     ScrollButtonComponent = TabScrollButton,
     scrollButtons = 'auto',
     selectionFollowsFocus,
+    slots = {},
     TabIndicatorProps = {},
     TabScrollButtonProps = {},
     textColor = 'primary',
@@ -442,6 +444,8 @@ const Tabs = React.forwardRef(function Tabs(inProps, ref) {
         direction={isRtl ? 'right' : 'left'}
         onClick={handleStartScrollClick}
         disabled={!displayScroll.start}
+        slots={slots}
+        components={components}
         {...TabScrollButtonProps}
         className={clsx(classes.scrollButtons, TabScrollButtonProps.className)}
       />
@@ -453,6 +457,8 @@ const Tabs = React.forwardRef(function Tabs(inProps, ref) {
         direction={isRtl ? 'left' : 'right'}
         onClick={handleEndScrollClick}
         disabled={!displayScroll.end}
+        slots={slots}
+        components={components}
         {...TabScrollButtonProps}
         className={clsx(classes.scrollButtons, TabScrollButtonProps.className)}
       />

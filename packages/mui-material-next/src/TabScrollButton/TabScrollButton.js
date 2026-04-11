@@ -13,11 +13,11 @@ import tabScrollButtonClasses, { getTabScrollButtonUtilityClass } from './tabScr
 const useUtilityClasses = (ownerState) => {
   const { classes, orientation, disabled } = ownerState;
 
-  const slots = {
+  const slotClasses = {
     root: ['root', orientation, disabled && 'disabled'],
   };
 
-  return composeClasses(slots, getTabScrollButtonUtilityClass, classes);
+  return composeClasses(slotClasses, getTabScrollButtonUtilityClass, classes);
 };
 
 const TabScrollButtonRoot = styled(ButtonBase, {
@@ -46,7 +46,7 @@ const TabScrollButtonRoot = styled(ButtonBase, {
 
 const TabScrollButton = React.forwardRef(function TabScrollButton(inProps, ref) {
   const props = useThemeProps({ props: inProps, name: 'MuiTabScrollButton' });
-  const { className, direction, orientation, disabled, ...other } = props;
+  const { className, direction, orientation, disabled, components = {}, slots = {}, ...other } = props;
 
   const theme = useTheme();
   const isRtl = theme.direction === 'rtl';
@@ -54,6 +54,19 @@ const TabScrollButton = React.forwardRef(function TabScrollButton(inProps, ref) 
   const ownerState = { isRtl, ...props };
 
   const classes = useUtilityClasses(ownerState);
+
+  const normalizedIcons =
+    isRtl
+      ? {
+          left: slots.right || components.right || KeyboardArrowRight,
+          right: slots.left || components.left || KeyboardArrowLeft,
+        }
+      : {
+          left: slots.left || components.left || KeyboardArrowLeft,
+          right: slots.right || components.right || KeyboardArrowRight,
+        };
+
+  const Icon = normalizedIcons[direction];
 
   return (
     <TabScrollButtonRoot
@@ -65,11 +78,7 @@ const TabScrollButton = React.forwardRef(function TabScrollButton(inProps, ref) 
       tabIndex={null}
       {...other}
     >
-      {direction === 'left' ? (
-        <KeyboardArrowLeft fontSize="small" />
-      ) : (
-        <KeyboardArrowRight fontSize="small" />
-      )}
+      <Icon fontSize="small" />
     </TabScrollButtonRoot>
   );
 });

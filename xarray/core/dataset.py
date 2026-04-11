@@ -4079,6 +4079,10 @@ class Dataset(
                 )
                 for n in idx.index.names:
                     replace_dims[n] = dim
+                for k in var_names:
+                    for d in self._variables[k].dims:
+                        if d != dim:
+                            replace_dims[d] = dim
 
             new_indexes.update({k: idx for k in idx_vars})
             new_variables.update(idx_vars)
@@ -4139,35 +4143,51 @@ class Dataset(
                 f"{tuple(invalid_coords)} are not coordinates with an index"
             )
 
-        drop_indexes: list[Hashable] = []
-        drop_variables: list[Hashable] = []
-        replaced_indexes: list[PandasMultiIndex] = []
+        drop_indexes: set[Hashable] = set()
+        drop_variables: set[Hashable] = set()
         new_indexes: dict[Hashable, Index] = {}
         new_variables: dict[Hashable, IndexVariable] = {}
+        reset_dims: set[Hashable] = set()
+        reset_levels: set[Hashable] = set()
 
         for name in dims_or_levels:
             index = self._indexes[name]
-            drop_indexes += list(self.xindexes.get_all_coords(name))
+            all_coord_names = set(self.xindexes.get_all_coords(name))
 
-            if isinstance(index, PandasMultiIndex) and name not in self.dims:
-                # special case for pd.MultiIndex (name is an index level):
-                # replace by a new index with dropped level(s) instead of just drop the index
-                if index not in replaced_indexes:
-                    level_names = index.index.names
-                    level_vars = {
-                        k: self._variables[k]
-                        for k in level_names
-                        if k not in dims_or_levels
-                    }
-                    if level_vars:
-                        idx = index.keep_levels(level_vars)
-                        idx_vars = idx.create_variables(level_vars)
-                        new_indexes.update({k: idx for k in idx_vars})
-                        new_variables.update(idx_vars)
-                replaced_indexes.append(index)
+            drop_indexes |= all_coord_names
 
-            if drop:
-                drop_variables.append(name)
+            if isinstance(index, PandasMultiIndex):
+                if name in self.dims:
+                    reset_dims.add(name)
+                    if drop:
+                        drop_variables |= all_coord_names
+                else:
+                    reset_levels.add(name)
+                    if drop:
+                        drop_variables.add(name)
+            else:
+                if drop:
+                    drop_variables |= all_coord_names
+
+        for index in self.xindexes.get_unique():
+            if not isinstance(index, PandasMultiIndex):
+                continue
+            level_names = index.index.names
+            dim = index.dim
+            if dim in reset_dims:
+                continue
+            dropped_level_names = [k for k in level_names if k in reset_levels]
+            kept_level_names = [k for k in level_names if k not in reset_levels]
+            if not dropped_level_names:
+                continue
+            kept_level_vars = {
+                k: self._variables[k] for k in kept_level_names
+            }
+            if kept_level_vars:
+                idx = index.keep_levels(kept_level_vars)
+                idx_vars = idx.create_variables(kept_level_vars)
+                new_indexes.update({k: idx for k in idx_vars})
+                new_variables.update(idx_vars)
 
         indexes = {k: v for k, v in self._indexes.items() if k not in drop_indexes}
         indexes.update(new_indexes)
@@ -4177,7 +4197,7 @@ class Dataset(
         }
         variables.update(new_variables)
 
-        coord_names = set(new_variables) | self._coord_names
+        coord_names = self._coord_names - drop_variables | set(new_variables)
 
         return self._replace(variables, coord_names=coord_names, indexes=indexes)
 

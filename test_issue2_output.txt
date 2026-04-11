@@ -1,0 +1,24 @@
+Test: set_index with different dim name than original variable dims
+Original:
+  dims: {'x': 3}
+  a: dims=('x',)
+  b: dims=('x',)
+
+After set_index(z=['a','b']):
+  dims: {'z': 3}
+  coords: ['a', 'b', 'z']
+  indexes: ['z']
+  a: dims=('z',)
+  b: dims=('z',)
+  z: dims=('z',)
+
+Test: sel on multi-index
+  ds2.sel(a=1) FAILED: "no index found for coordinate 'a'"
+
+Test: set_index with same dim name as variable dims
+  dims: {'x': 3}
+  coords: ['a', 'b', 'x']
+  indexes: ['x']
+  a: dims=('x',)
+  b: dims=('x',)
+  x: dims=('x',)

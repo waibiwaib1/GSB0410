@@ -1,0 +1,61 @@
+============================================================
+ISSUE 1: reset_index incomplete multi-level handling
+============================================================
+
+Test 1a: reset_index with multiple level names at once
+  Before: _indexes keys = ['x', 'level_1', 'level_2']
+  Before: _variables keys = ['x', 'level_1', 'level_2']
+  Before: _coord_names = {'level_1', 'x', 'level_2'}
+  After: _indexes keys = []
+  After: _variables keys = ['x', 'level_1', 'level_2']
+  After: _coord_names = {'level_1', 'x', 'level_2'}
+  coord_names subset of variables: True
+
+Test 1b: reset_index(z, drop=True) on multi-index from coords
+  After set_index: _variables keys = ['z', 'a', 'b']
+  After set_index: _coord_names = {'z', 'b', 'a'}
+  After reset_index(drop=True): _variables keys = ['a', 'b']
+  After reset_index(drop=True): _coord_names = {'a', 'b'}
+  coord_names subset of variables: True
+  'a' still in variables: True
+  'b' still in variables: True
+  NOTE: With drop=True, should a and b be dropped too? Or kept as plain coords?
+
+============================================================
+ISSUE 2: set_index loses old coordinates
+============================================================
+
+Test 2a: set_index(z=['a', 'b']) from coords
+  Before: _variables keys = ['a', 'b']
+  Before: _coord_names = {'a', 'b'}
+  After: _variables keys = ['z', 'a', 'b']
+  After: _coord_names = {'z', 'b', 'a'}
+  After: dims = {'z': 3}
+  'a' dims = ('z',)
+  'b' dims = ('z',)
+
+============================================================
+ISSUE 3: Multi-index to single-index name inconsistency
+============================================================
+
+Test 3a: Dropping one level of multi-index, leaving single level
+  Before: _indexes keys = ['x', 'level_1', 'level_2']
+  Before: _variables keys = ['x', 'level_1', 'level_2']
+  After reset_index('level_1'): _indexes keys = ['level_2']
+  After reset_index('level_1'): _variables keys = ['x', 'level_1', 'level_2']
+  After reset_index('level_1'): _coord_names = {'level_1', 'x', 'level_2'}
+  Index key=level_2, type=PandasIndex
+    index.name=level_2, index type=Index
+  Variable key=x, dims=('x',)
+  Variable key=level_1, dims=('x',)
+  Variable key=level_2, dims=('x',)
+
+Test 3b: keep_levels producing single PandasIndex
+  MultiIndex dim=x, names=['level_1', 'level_2']
+  keep_levels result type: PandasIndex
+  keep_levels result dim: x
+  keep_levels result index.name: level_2
+  create_variables keys: ['level_2']
+    var key=level_2, dims=('x',)
+
+  NOTE: After dropping to a single level, the index name should be the dimension name 'x', not 'level_2'

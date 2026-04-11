@@ -1,0 +1,8 @@
+test_set_index case 1 (multi-index names): PASS
+test_set_index case 2 (pre-existing indexes): PASS
+test_set_index case 3 (single data var): PASS
+test_reset_index case 1 (full reset): PASS
+test_reset_index case 2 (full reset drop): PASS
+test_sel on multi-index: PASS (result=[10])
+test_sel on level: PASS (result=[10])
+test_sel after reset_index level (on dim): PASS

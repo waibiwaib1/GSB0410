@@ -1,0 +1,58 @@
+=== Issue 2 Analysis: set_index loses old coordinates ===
+Original: coord_names={'a', 'b'}, variables=['a', 'b']
+  a: dims=('x',)
+  b: dims=('x',)
+
+After set_index(z=['a','b']):
+  coord_names={'z', 'a', 'b'}, variables=['z', 'a', 'b']
+  indexes=['z', 'a', 'b']
+  z: dims=('z',)
+  a: dims=('z',)
+  b: dims=('z',)
+
+After reset_index('z', drop=False):
+  coord_names={'z', 'a', 'b'}, variables=['z', 'a', 'b']
+  indexes=[]
+  z: dims=('z',)
+  a: dims=('z',)
+  b: dims=('z',)
+
+After reset_index('z', drop=True):
+  coord_names={'a', 'b'}, variables=['a', 'b']
+  indexes=[]
+  a: dims=('z',)
+  b: dims=('z',)
+
+=== Issue 3 Analysis: multi-index to single-index name inconsistency ===
+
+Multi-index dataset:
+  coord_names={'level_2', 'x', 'level_1'}, variables=['x', 'level_1', 'level_2']
+  indexes=['x', 'level_1', 'level_2']
+
+After reset_index('level_1'):
+  coord_names={'level_2', 'x', 'level_1'}, variables=['x', 'level_1', 'level_2']
+  indexes=['x']
+  x: dims=('x',), type=IndexVariable
+  level_1: dims=('x',), type=IndexVariable
+  level_2: dims=('x',), type=IndexVariable
+  index[x]: type=PandasIndex, dim=x
+    index.name=x
+
+After reset_index(['level_1', 'level_2']) - all levels dropped:
+  coord_names={'level_2', 'x', 'level_1'}, variables=['x', 'level_1', 'level_2']
+  indexes=[]
+  x: dims=('x',)
+  level_1: dims=('x',)
+  level_2: dims=('x',)
+
+=== Issue 3 Detail: check keep_levels behavior ===
+Original index type: PandasMultiIndex
+  index.names=['level_1', 'level_2']
+  dim=x
+
+After keep_levels(level_2):
+  new index type: PandasIndex
+  dim=x
+  index.name=x
+  create_variables keys: ['x']
+    x: dims=('x',)

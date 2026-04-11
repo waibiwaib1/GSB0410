@@ -1,0 +1,61 @@
+Test 1: MVCE - reset_index(z, drop=True)
+  _coord_names: set()
+  _variables keys: []
+  coord_names subset of variables: True
+  len(data_vars): 0
+  PASS
+
+Test 2: reset_index(z, drop=False)
+  _coord_names: {'z', 'a', 'b'}
+  _variables keys: ['z', 'a', 'b']
+  _indexes keys: []
+  coord_names subset of variables: True
+  PASS
+
+Test 3: Standard multi-index reset_index(x)
+  _coord_names: {'level_1', 'x', 'level_2'}
+  _variables keys: ['x', 'level_1', 'level_2']
+  _indexes keys: []
+  PASS
+
+Test 4: Standard multi-index reset_index(x, drop=True)
+  _coord_names: set()
+  _variables keys: []
+  _indexes keys: []
+  PASS
+
+Test 5: reset_index(level_1, drop=False)
+  _coord_names: {'level_1', 'x', 'level_2'}
+  _variables keys: ['x', 'level_1', 'level_2']
+  _indexes keys: ['level_2']
+  PASS
+
+Test 6: reset_index(level_1, drop=True)
+  _coord_names: {'x', 'level_2'}
+  _variables keys: ['x', 'level_2']
+  _indexes keys: ['level_2']
+  PASS
+
+Test 7: reset_index([level_1, level_2]) - multiple levels at once
+  _coord_names: {'level_1', 'x', 'level_2'}
+  _variables keys: ['x', 'level_1', 'level_2']
+  _indexes keys: []
+  PASS
+
+Test 8: reset_index([level_1, level_2], drop=True)
+  _coord_names: {'x'}
+  _variables keys: ['x']
+  _indexes keys: []
+  PASS
+
+Test 9: Simple index reset_index(x, drop=False)
+  _coord_names: {'x'}
+  _variables keys: ['x']
+  PASS
+
+Test 10: Simple index reset_index(x, drop=True)
+  _coord_names: set()
+  _variables keys: []
+  PASS
+
+All tests passed!

@@ -1,0 +1,66 @@
+=== MVCE: Original Bug ===
+len(data_vars) = 0
+coord_names = {'a', 'b'}
+variables = ['a', 'b']
+coord_names subset of variables: True
+repr:
+<xarray.Dataset>
+Dimensions:  (z: 3)
+Coordinates:
+    a        (z) int32 1 2 3
+    b        (z) <U1 'a' 'b' 'c'
+Dimensions without coordinates: z
+Data variables:
+    *empty*
+
+=== Issue 2: reset_index drop=True preserves non-index coords ===
+After reset_index('z', drop=True):
+  coord_names = {'a', 'b'}
+  variables = ['a', 'b']
+  'a' in coords: True
+  'b' in coords: True
+  'z' in coords: False
+
+=== Issue 2: reset_index drop=False preserves all as plain coords ===
+After reset_index('z', drop=False):
+  coord_names = {'z', 'a', 'b'}
+  variables = ['z', 'a', 'b']
+  indexes = []
+  'a' in coords: True
+  'b' in coords: True
+  'z' in coords: True
+
+=== Issue 3: multi-index to single-index name ===
+After reset_index('level_1'):
+  coord_names = {'level_1', 'x', 'level_2'}
+  variables = ['x', 'level_1', 'level_2']
+  indexes = ['x']
+  Has index on 'x': True
+  repr:
+<xarray.Dataset>
+Dimensions:  (x: 3)
+Coordinates:
+  * x        (x) int64 1 2 3
+    level_1  (x) object 'a' 'b' 'c'
+    level_2  (x) int64 1 2 3
+Data variables:
+    *empty*
+
+After reset_index('level_1', drop=True):
+  coord_names = {'x', 'level_2'}
+  variables = ['x', 'level_2']
+  indexes = ['x']
+  Has index on 'x': True
+
+=== Issue 1: reset_index multiple levels at once ===
+After reset_index(['level_1', 'level_2']):
+  coord_names = {'level_1', 'x', 'level_2'}
+  variables = ['x', 'level_1', 'level_2']
+  indexes = []
+  coord_names subset of variables: True
+
+After reset_index(['level_1', 'level_2'], drop=True):
+  coord_names = {'x'}
+  variables = ['x']
+  indexes = []
+  coord_names subset of variables: True

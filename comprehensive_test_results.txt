@@ -1,0 +1,24 @@
+  MVCE: no ValueError: PASS
+  reset_index(dim): PASS
+  reset_index(dim, drop=True): PASS
+  reset_index(level): PASS
+  reset_index(level, drop=True): PASS
+  reset_index([l1,l2]): PASS
+  reset_index([l1,l2]) coord subset: PASS
+  reset_index([l1,l2],drop): PASS
+  set_index(z=[a,b]): single dim: PASS
+  set_index(z=[a,b]): data dim: PASS
+  reset_index(z,drop=F): coords preserved: PASS
+  reset_index(z,drop=F): no indexes: PASS
+  reset_index(z,drop=T): coords removed: PASS
+  reset_index(z,drop=T): data preserved: PASS
+  Issue3: index exists on 'x': PASS
+  Issue3: name == 'x': PASS
+  keep_levels returns PandasIndex: PASS
+  keep_levels name == dim: PASS
+  sel(level_1='a'): PASS
+  sel after reset_index(level): PASS
+  simple reset_index: PASS
+  simple reset_index(drop=True): PASS
+
+All tests passed!

@@ -1,0 +1,30 @@
+=== MVCE ===
+len(data_vars) = 0
+coord_names = set()
+variables = []
+coord_names subset of variables: True
+repr: OK
+
+=== Issue 2: set_index then reset_index preserves coords ===
+reset_index(z, drop=False): coords=['z', 'a', 'b'], indexes=[]
+reset_index(z, drop=True): coords=[], indexes=[]
+
+=== Issue 3: multi-index to single-index name ===
+reset_index('level_1'): indexes=['x']
+  Has index on 'x': True
+  Index type: PandasIndex, dim=x
+  index.name: x
+  repr: OK
+
+=== Issue 1: reset_index duplicate processing ===
+reset_index(['level_1', 'level_2']): coord_names={'level_2', 'level_1', 'x'}
+  coord_names subset of variables: True
+reset_index(['level_1', 'level_2'], drop=True): coord_names={'x'}
+  coord_names subset of variables: True
+
+=== Issue 2: set_index with dim name different from variable dims ===
+After set_index(z=['a','b']):
+  dims: {'z': 3}
+  coords: ['z', 'a', 'b']
+  indexes: ['z', 'a', 'b']
+  sel(a=1): OK, data=[10]

@@ -1,0 +1,34 @@
+Original:
+  dims: {'x': 3}, coords: ['a', 'b'], data_vars: ['data']
+
+After set_index(z=['a','b']):
+  dims: {'z': 3}, coords: ['z', 'a', 'b'], data_vars: ['data']
+  coord_names: {'z', 'b', 'a'}
+  variables: ['data', 'z', 'a', 'b']
+
+After reset_index('z', drop=False):
+  dims: {'z': 3}, coords: ['z', 'a', 'b'], data_vars: ['data']
+  coord_names: {'z', 'b', 'a'}
+  variables: ['data', 'z', 'a', 'b']
+  indexes: []
+
+After reset_index('z', drop=True):
+  dims: {'z': 3}, coords: [], data_vars: ['data']
+  coord_names: set()
+  variables: ['data']
+  coord_names subset of variables: True
+
+After set_index(x=['a','b']):
+  dims: {'x': 3}, coords: ['x', 'a', 'b'], data_vars: ['data']
+
+After reset_index('x', drop=True):
+  dims: {'x': 3}, coords: [], data_vars: ['data']
+  coord_names: set()
+  variables: ['data']
+  coord_names subset of variables: True
+
+=== Standard multi-index ===
+Original: dims={'x': 3}, coords=['x', 'level_1', 'level_2']
+reset_index('level_1', drop=True): dims={'x': 3}, coords=['x', 'level_2'], indexes=['x']
+reset_index(['level_1', 'level_2'], drop=True): dims={'x': 3}, coords=['x'], indexes=[]
+  coord_names subset of variables: True

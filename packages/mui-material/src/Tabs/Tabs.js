@@ -242,12 +242,14 @@ const Tabs = React.forwardRef(function Tabs(inProps, ref) {
     className,
     component = 'div',
     allowScrollButtonsMobile = false,
+    components = {},
     indicatorColor = 'primary',
     onChange,
     orientation = 'horizontal',
     ScrollButtonComponent = TabScrollButton,
     scrollButtons = 'auto',
     selectionFollowsFocus,
+    slots = {},
     TabIndicatorProps = {},
     TabScrollButtonProps = {},
     textColor = 'primary',
@@ -497,13 +499,27 @@ const Tabs = React.forwardRef(function Tabs(inProps, ref) {
     const showScrollButtons =
       scrollable && ((scrollButtons === 'auto' && scrollButtonsActive) || scrollButtons === true);
 
+    const mergedScrollButtonProps = {
+      ...TabScrollButtonProps,
+      components: {
+        StartScrollButtonIcon: slots.StartScrollButtonIcon || components.StartScrollButtonIcon,
+        EndScrollButtonIcon: slots.EndScrollButtonIcon || components.EndScrollButtonIcon,
+        ...TabScrollButtonProps.components,
+      },
+      slots: {
+        StartScrollButtonIcon: slots.StartScrollButtonIcon || components.StartScrollButtonIcon,
+        EndScrollButtonIcon: slots.EndScrollButtonIcon || components.EndScrollButtonIcon,
+        ...TabScrollButtonProps.slots,
+      },
+    };
+
     conditionalElements.scrollButtonStart = showScrollButtons ? (
       <ScrollButtonComponent
         orientation={orientation}
         direction={isRtl ? 'right' : 'left'}
         onClick={handleStartScrollClick}
         disabled={!displayScroll.start}
-        {...TabScrollButtonProps}
+        {...mergedScrollButtonProps}
         className={clsx(classes.scrollButtons, TabScrollButtonProps.className)}
       />
     ) : null;
@@ -514,7 +530,7 @@ const Tabs = React.forwardRef(function Tabs(inProps, ref) {
         direction={isRtl ? 'left' : 'right'}
         onClick={handleEndScrollClick}
         disabled={!displayScroll.end}
-        {...TabScrollButtonProps}
+        {...mergedScrollButtonProps}
         className={clsx(classes.scrollButtons, TabScrollButtonProps.className)}
       />
     ) : null;
@@ -816,6 +832,17 @@ Tabs.propTypes /* remove-proptypes */ = {
    */
   component: PropTypes.elementType,
   /**
+   * The components used for each slot inside the Tabs component.
+   * This prop is an alias for the `slots` prop.
+   * It's recommended to use the `slots` prop instead.
+   *
+   * @default {}
+   */
+  components: PropTypes.shape({
+    EndScrollButtonIcon: PropTypes.elementType,
+    StartScrollButtonIcon: PropTypes.elementType,
+  }),
+  /**
    * Determines the color of the indicator.
    * @default 'primary'
    */
@@ -857,6 +884,16 @@ Tabs.propTypes /* remove-proptypes */ = {
    * changes on activation.
    */
   selectionFollowsFocus: PropTypes.bool,
+  /**
+   * The components used for each slot inside the Tabs component.
+   * This prop is an alias for the `components` prop, which will be deprecated in the future.
+   *
+   * @default {}
+   */
+  slots: PropTypes.shape({
+    EndScrollButtonIcon: PropTypes.elementType,
+    StartScrollButtonIcon: PropTypes.elementType,
+  }),
   /**
    * The system prop that allows defining system overrides as well as additional CSS styles.
    */

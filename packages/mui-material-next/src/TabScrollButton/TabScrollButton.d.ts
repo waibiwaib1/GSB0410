@@ -13,6 +13,17 @@ export interface TabScrollButtonProps extends StandardProps<React.HTMLAttributes
    */
   classes?: Partial<TabScrollButtonClasses>;
   /**
+   * The components used for each slot inside.
+   * This prop is an alias for the `slots` prop.
+   * It's recommended to use the `slots` prop instead.
+   *
+   * @default {}
+   */
+  components?: {
+    StartScrollButtonIcon?: React.ElementType;
+    EndScrollButtonIcon?: React.ElementType;
+  };
+  /**
    * The direction the button should indicate.
    */
   direction: 'left' | 'right';
@@ -24,6 +35,16 @@ export interface TabScrollButtonProps extends StandardProps<React.HTMLAttributes
    * The component orientation (layout flow direction).
    */
   orientation: 'horizontal' | 'vertical';
+  /**
+   * The components used for each slot inside.
+   * This prop is an alias for the `components` prop, which will be deprecated in the future.
+   *
+   * @default {}
+   */
+  slots?: {
+    StartScrollButtonIcon?: React.ElementType;
+    EndScrollButtonIcon?: React.ElementType;
+  };
   /**
    * The system prop that allows defining system overrides as well as additional CSS styles.
    */

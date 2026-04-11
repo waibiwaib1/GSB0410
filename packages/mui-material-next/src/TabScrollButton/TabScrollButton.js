@@ -46,7 +46,15 @@ const TabScrollButtonRoot = styled(ButtonBase, {
 
 const TabScrollButton = React.forwardRef(function TabScrollButton(inProps, ref) {
   const props = useThemeProps({ props: inProps, name: 'MuiTabScrollButton' });
-  const { className, direction, orientation, disabled, ...other } = props;
+  const {
+    className,
+    components = {},
+    direction,
+    disabled,
+    orientation,
+    slots = {},
+    ...other
+  } = props;
 
   const theme = useTheme();
   const isRtl = theme.direction === 'rtl';
@@ -54,6 +62,12 @@ const TabScrollButton = React.forwardRef(function TabScrollButton(inProps, ref) 
   const ownerState = { isRtl, ...props };
 
   const classes = useUtilityClasses(ownerState);
+
+  const StartKeyboardArrowIcon = isRtl ? KeyboardArrowRight : KeyboardArrowLeft;
+  const EndKeyboardArrowIcon = isRtl ? KeyboardArrowLeft : KeyboardArrowRight;
+
+  const StartScrollButtonIcon = slots.StartScrollButtonIcon || components.StartScrollButtonIcon || StartKeyboardArrowIcon;
+  const EndScrollButtonIcon = slots.EndScrollButtonIcon || components.EndScrollButtonIcon || EndKeyboardArrowIcon;
 
   return (
     <TabScrollButtonRoot
@@ -66,9 +80,9 @@ const TabScrollButton = React.forwardRef(function TabScrollButton(inProps, ref) 
       {...other}
     >
       {direction === 'left' ? (
-        <KeyboardArrowLeft fontSize="small" />
+        <StartScrollButtonIcon fontSize="small" />
       ) : (
-        <KeyboardArrowRight fontSize="small" />
+        <EndScrollButtonIcon fontSize="small" />
       )}
     </TabScrollButtonRoot>
   );
@@ -92,6 +106,17 @@ TabScrollButton.propTypes /* remove-proptypes */ = {
    */
   className: PropTypes.string,
   /**
+   * The components used for each slot inside.
+   * This prop is an alias for the `slots` prop.
+   * It's recommended to use the `slots` prop instead.
+   *
+   * @default {}
+   */
+  components: PropTypes.shape({
+    EndScrollButtonIcon: PropTypes.elementType,
+    StartScrollButtonIcon: PropTypes.elementType,
+  }),
+  /**
    * The direction the button should indicate.
    */
   direction: PropTypes.oneOf(['left', 'right']).isRequired,
@@ -103,6 +128,16 @@ TabScrollButton.propTypes /* remove-proptypes */ = {
    * The component orientation (layout flow direction).
    */
   orientation: PropTypes.oneOf(['horizontal', 'vertical']).isRequired,
+  /**
+   * The components used for each slot inside.
+   * This prop is an alias for the `components` prop, which will be deprecated in the future.
+   *
+   * @default {}
+   */
+  slots: PropTypes.shape({
+    EndScrollButtonIcon: PropTypes.elementType,
+    StartScrollButtonIcon: PropTypes.elementType,
+  }),
   /**
    * The system prop that allows defining system overrides as well as additional CSS styles.
    */

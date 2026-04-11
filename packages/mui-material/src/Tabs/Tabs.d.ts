@@ -49,6 +49,17 @@ export interface TabsTypeMap<P = {}, D extends React.ElementType = typeof Button
      */
     classes?: Partial<TabsClasses>;
     /**
+     * The components used for each slot inside the Tabs component.
+     * This prop is an alias for the `slots` prop.
+     * It's recommended to use the `slots` prop instead.
+     *
+     * @default {}
+     */
+    components?: {
+      StartScrollButtonIcon?: React.ElementType;
+      EndScrollButtonIcon?: React.ElementType;
+    };
+    /**
      * Determines the color of the indicator.
      * @default 'primary'
      */
@@ -90,6 +101,16 @@ export interface TabsTypeMap<P = {}, D extends React.ElementType = typeof Button
      * changes on activation.
      */
     selectionFollowsFocus?: boolean;
+    /**
+     * The components used for each slot inside the Tabs component.
+     * This prop is an alias for the `components` prop, which will be deprecated in the future.
+     *
+     * @default {}
+     */
+    slots?: {
+      StartScrollButtonIcon?: React.ElementType;
+      EndScrollButtonIcon?: React.ElementType;
+    };
     /**
      * Props applied to the tab indicator element.
      * @default  {}

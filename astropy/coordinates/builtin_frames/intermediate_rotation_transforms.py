@@ -8,16 +8,22 @@ rotations without aberration corrections or offsets.
 import numpy as np
 import erfa
 
+from astropy import units as u
 from astropy.coordinates.baseframe import frame_transform_graph
 from astropy.coordinates.transformations import FunctionTransformWithFiniteDifference
-from astropy.coordinates.matrix_utilities import matrix_transpose
+from astropy.coordinates.representation import (SphericalRepresentation,
+                                                UnitSphericalRepresentation)
+from astropy.coordinates.matrix_utilities import rotation_matrix, matrix_transpose
 
 from .icrs import ICRS
 from .gcrs import GCRS, PrecessedGeocentric
 from .cirs import CIRS
 from .itrs import ITRS
 from .equatorial import TEME, TETE
-from .utils import get_polar_motion, get_jd12, EARTH_CENTER
+from .altaz import AltAz
+from .hadec import HADec
+from .utils import get_polar_motion, get_jd12, EARTH_CENTER, PIOVER2
+from ..erfa_astrom import erfa_astrom
 
 # # first define helper functions
 
@@ -146,9 +152,9 @@ def tete_to_gcrs(tete_coo, gcrs_frame):
 
 @frame_transform_graph.transform(FunctionTransformWithFiniteDifference, TETE, ITRS)
 def tete_to_itrs(tete_coo, itrs_frame):
-    # first get us to TETE at the target obstime, and geocentric position
+    # first get us to TETE at the target obstime and the ITRS frame's location
     tete_coo2 = tete_coo.transform_to(TETE(obstime=itrs_frame.obstime,
-                                           location=EARTH_CENTER))
+                                           location=itrs_frame.location))
 
     # now get the pmatrix
     pmat = tete_to_itrs_mat(itrs_frame.obstime)
@@ -161,7 +167,7 @@ def itrs_to_tete(itrs_coo, tete_frame):
     # compute the pmatrix, and then multiply by its transpose
     pmat = tete_to_itrs_mat(itrs_coo.obstime)
     newrepr = itrs_coo.cartesian.transform(matrix_transpose(pmat))
-    tete = TETE(newrepr, obstime=itrs_coo.obstime)
+    tete = TETE(newrepr, obstime=itrs_coo.obstime, location=itrs_coo.location)
 
     # now do any needed offsets (no-op if same obstime)
     return tete.transform_to(tete_frame)
@@ -196,9 +202,9 @@ def cirs_to_gcrs(cirs_coo, gcrs_frame):
 
 @frame_transform_graph.transform(FunctionTransformWithFiniteDifference, CIRS, ITRS)
 def cirs_to_itrs(cirs_coo, itrs_frame):
-    # first get us to geocentric CIRS at the target obstime
+    # first get us to CIRS at the target obstime and the ITRS frame's location
     cirs_coo2 = cirs_coo.transform_to(CIRS(obstime=itrs_frame.obstime,
-                                           location=EARTH_CENTER))
+                                           location=itrs_frame.location))
 
     # now get the pmatrix
     pmat = cirs_to_itrs_mat(itrs_frame.obstime)
@@ -211,7 +217,7 @@ def itrs_to_cirs(itrs_coo, cirs_frame):
     # compute the pmatrix, and then multiply by its transpose
     pmat = cirs_to_itrs_mat(itrs_coo.obstime)
     newrepr = itrs_coo.cartesian.transform(matrix_transpose(pmat))
-    cirs = CIRS(newrepr, obstime=itrs_coo.obstime)
+    cirs = CIRS(newrepr, obstime=itrs_coo.obstime, location=itrs_coo.location)
 
     # now do any needed offsets (no-op if same obstime)
     return cirs.transform_to(cirs_frame)
@@ -255,7 +261,7 @@ def teme_to_itrs(teme_coo, itrs_frame):
     # use the pmatrix to transform to ITRS in the source obstime
     pmat = teme_to_itrs_mat(teme_coo.obstime)
     crepr = teme_coo.cartesian.transform(pmat)
-    itrs = ITRS(crepr, obstime=teme_coo.obstime)
+    itrs = ITRS(crepr, obstime=teme_coo.obstime, location=itrs_frame.location)
 
     # transform the ITRS coordinate to the target obstime
     return itrs.transform_to(itrs_frame)
@@ -264,7 +270,8 @@ def teme_to_itrs(teme_coo, itrs_frame):
 @frame_transform_graph.transform(FunctionTransformWithFiniteDifference, ITRS, TEME)
 def itrs_to_teme(itrs_coo, teme_frame):
     # transform the ITRS coordinate to the target obstime
-    itrs_coo2 = itrs_coo.transform_to(ITRS(obstime=teme_frame.obstime))
+    itrs_coo2 = itrs_coo.transform_to(ITRS(obstime=teme_frame.obstime,
+                                           location=itrs_coo.location))
 
     # compute the pmatrix, and then multiply by its transpose
     pmat = teme_to_itrs_mat(teme_frame.obstime)
@@ -272,8 +279,167 @@ def itrs_to_teme(itrs_coo, teme_frame):
     return teme_frame.realize_frame(newrepr)
 
 
+def itrs_to_observed_mat(observed_frame):
+    lon, lat, height = observed_frame.location.to_geodetic('WGS84')
+    elong = lon.to_value(u.radian)
+
+    if isinstance(observed_frame, AltAz):
+        elat = lat.to_value(u.radian)
+        minus_x = np.eye(3)
+        minus_x[0][0] = -1.0
+        mat = (minus_x
+               @ rotation_matrix(PIOVER2 - elat, 'y', unit=u.radian)
+               @ rotation_matrix(elong, 'z', unit=u.radian))
+    else:
+        minus_y = np.eye(3)
+        minus_y[1][1] = -1.0
+        mat = (minus_y
+               @ rotation_matrix(elong, 'z', unit=u.radian))
+    return mat
+
+
+@frame_transform_graph.transform(FunctionTransformWithFiniteDifference, ITRS, AltAz)
+@frame_transform_graph.transform(FunctionTransformWithFiniteDifference, ITRS, HADec)
+def itrs_to_observed(itrs_coo, observed_frame):
+    # If the ITRS coordinate's obstime differs from the observed frame's
+    # obstime, we need to go through CIRS to properly account for Earth
+    # rotation. This avoids the pitfall of doing ITRS->ITRS which would shift
+    # coordinates to the SSB rather than the rotating ITRF.
+    # If the ITRS coordinate has a non-geocentric location that differs from
+    # the observed frame's location, we also go through CIRS to account for
+    # the observer offset (aberration/parallax).
+    itrs_loc_is_geocentric = np.all(itrs_coo.location == EARTH_CENTER)
+    loc_differs = (not itrs_loc_is_geocentric and
+                   np.any(itrs_coo.location != observed_frame.location))
+
+    if np.any(itrs_coo.obstime != observed_frame.obstime) or loc_differs:
+        cirs_coo = itrs_coo.transform_to(CIRS(obstime=observed_frame.obstime,
+                                              location=observed_frame.location))
+        return cirs_coo.transform_to(observed_frame)
+
+    # Form topocentric ITRS position relative to the observer
+    topocentric_itrs_repr = (itrs_coo.cartesian
+                             - observed_frame.location.get_itrs().cartesian)
+
+    # If there is no refraction (pressure == 0), use the direct rotation
+    if isinstance(observed_frame.pressure, u.Quantity):
+        has_pressure = np.any(observed_frame.pressure > 0)
+    else:
+        has_pressure = observed_frame.pressure > 0
+
+    if not has_pressure:
+        rep = topocentric_itrs_repr.transform(itrs_to_observed_mat(observed_frame))
+        return observed_frame.realize_frame(rep)
+
+    # With refraction: go through CIRS and use erfa.atioq which handles
+    # refraction via the astrom context from apio.
+    is_unitspherical = (isinstance(itrs_coo.data, UnitSphericalRepresentation) or
+                        itrs_coo.cartesian.x.unit == u.one)
+
+    # Rotate topocentric ITRS to topocentric CIRS
+    pmat = cirs_to_itrs_mat(observed_frame.obstime)
+    cirs_repr = topocentric_itrs_repr.transform(matrix_transpose(pmat))
+
+    if is_unitspherical:
+        cirs_srepr = cirs_repr.represent_as(UnitSphericalRepresentation)
+    else:
+        cirs_srepr = cirs_repr.represent_as(SphericalRepresentation)
+
+    cirs_ra = cirs_srepr.lon.to_value(u.radian)
+    cirs_dec = cirs_srepr.lat.to_value(u.radian)
+
+    astrom = erfa_astrom.get().apio(observed_frame)
+
+    if isinstance(observed_frame, AltAz):
+        lon, zen, _, _, _ = erfa.atioq(cirs_ra, cirs_dec, astrom)
+        lat = PIOVER2 - zen
+    else:
+        _, _, lon, lat, _ = erfa.atioq(cirs_ra, cirs_dec, astrom)
+
+    if is_unitspherical:
+        rep = UnitSphericalRepresentation(lat=u.Quantity(lat, u.radian, copy=False),
+                                          lon=u.Quantity(lon, u.radian, copy=False),
+                                          copy=False)
+    else:
+        rep = SphericalRepresentation(lat=u.Quantity(lat, u.radian, copy=False),
+                                      lon=u.Quantity(lon, u.radian, copy=False),
+                                      distance=cirs_srepr.distance,
+                                      copy=False)
+    return observed_frame.realize_frame(rep)
+
+
+@frame_transform_graph.transform(FunctionTransformWithFiniteDifference, AltAz, ITRS)
+@frame_transform_graph.transform(FunctionTransformWithFiniteDifference, HADec, ITRS)
+def observed_to_itrs(observed_coo, itrs_frame):
+    # Check if refraction is active
+    if isinstance(observed_coo.pressure, u.Quantity):
+        has_pressure = np.any(observed_coo.pressure > 0)
+    else:
+        has_pressure = observed_coo.pressure > 0
+
+    # Determine if we need to go through CIRS for obstime/location sync
+    itrs_loc_is_geocentric = np.all(itrs_frame.location == EARTH_CENTER)
+    loc_differs = (not itrs_loc_is_geocentric and
+                   np.any(itrs_frame.location != observed_coo.location))
+    needs_cirs = np.any(itrs_frame.obstime != observed_coo.obstime) or loc_differs
+
+    if has_pressure:
+        # With refraction: use erfa.atoiq to remove refraction, going
+        # through CIRS intermediate step
+        is_unitspherical = (isinstance(observed_coo.data, UnitSphericalRepresentation) or
+                            observed_coo.cartesian.x.unit == u.one)
+
+        usrepr = observed_coo.represent_as(UnitSphericalRepresentation)
+        lon = usrepr.lon.to_value(u.radian)
+        lat = usrepr.lat.to_value(u.radian)
+
+        if isinstance(observed_coo, AltAz):
+            coord_type = 'A'
+            lat = PIOVER2 - lat
+        else:
+            coord_type = 'H'
+
+        astrom = erfa_astrom.get().apio(observed_coo)
+
+        cirs_ra, cirs_dec = erfa.atoiq(coord_type, lon, lat, astrom) << u.radian
+
+        if is_unitspherical:
+            distance = None
+        else:
+            distance = observed_coo.distance
+
+        cirs_at_obs_time = CIRS(ra=cirs_ra, dec=cirs_dec, distance=distance,
+                                obstime=observed_coo.obstime,
+                                location=observed_coo.location)
+
+        # Now transform CIRS to ITRS at the target obstime/location
+        if needs_cirs:
+            return cirs_at_obs_time.transform_to(itrs_frame)
+
+        # Direct CIRS -> topocentric ITRS rotation
+        pmat = cirs_to_itrs_mat(observed_coo.obstime)
+        topocentric_itrs_repr = cirs_at_obs_time.cartesian.transform(pmat)
+        rep = topocentric_itrs_repr + observed_coo.location.get_itrs().cartesian
+        return itrs_frame.realize_frame(rep)
+    else:
+        # No refraction: use direct rotation
+        topocentric_itrs_repr = observed_coo.cartesian.transform(matrix_transpose(
+                                itrs_to_observed_mat(observed_coo)))
+        rep = topocentric_itrs_repr + observed_coo.location.get_itrs().cartesian
+
+        # If obstime or location differ, go through CIRS for proper alignment
+        if needs_cirs:
+            itrs_at_obs = ITRS(rep, obstime=observed_coo.obstime,
+                               location=observed_coo.location)
+            return itrs_at_obs.transform_to(itrs_frame)
+
+        return itrs_frame.realize_frame(rep)
+
+
 # Create loopback transformations
 frame_transform_graph._add_merged_transform(ITRS, CIRS, ITRS)
 frame_transform_graph._add_merged_transform(PrecessedGeocentric, GCRS, PrecessedGeocentric)
 frame_transform_graph._add_merged_transform(TEME, ITRS, TEME)
 frame_transform_graph._add_merged_transform(TETE, ICRS, TETE)
+frame_transform_graph._add_merged_transform(AltAz, ITRS, AltAz)
+frame_transform_graph._add_merged_transform(HADec, ITRS, HADec)

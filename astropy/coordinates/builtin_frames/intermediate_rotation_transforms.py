@@ -8,16 +8,19 @@ rotations without aberration corrections or offsets.
 import numpy as np
 import erfa
 
+from astropy import units as u
 from astropy.coordinates.baseframe import frame_transform_graph
 from astropy.coordinates.transformations import FunctionTransformWithFiniteDifference
-from astropy.coordinates.matrix_utilities import matrix_transpose
+from astropy.coordinates.matrix_utilities import matrix_transpose, rotation_matrix
 
 from .icrs import ICRS
 from .gcrs import GCRS, PrecessedGeocentric
 from .cirs import CIRS
 from .itrs import ITRS
 from .equatorial import TEME, TETE
-from .utils import get_polar_motion, get_jd12, EARTH_CENTER
+from .altaz import AltAz
+from .hadec import HADec
+from .utils import get_polar_motion, get_jd12, EARTH_CENTER, PIOVER2
 
 # # first define helper functions
 
@@ -146,14 +149,25 @@ def tete_to_gcrs(tete_coo, gcrs_frame):
 
 @frame_transform_graph.transform(FunctionTransformWithFiniteDifference, TETE, ITRS)
 def tete_to_itrs(tete_coo, itrs_frame):
-    # first get us to TETE at the target obstime, and geocentric position
-    tete_coo2 = tete_coo.transform_to(TETE(obstime=itrs_frame.obstime,
-                                           location=EARTH_CENTER))
+    # Get TETE at the target obstime, preserving the location if the target
+    # frame doesn't specify one
+    if itrs_frame.location == EARTH_CENTER and tete_coo.location != EARTH_CENTER:
+        # Target frame is geocentric but source is topocentric:
+        # First transform to geocentric TETE at target obstime
+        tete_coo2 = tete_coo.transform_to(TETE(obstime=itrs_frame.obstime,
+                                               location=EARTH_CENTER))
+        pmat = tete_to_itrs_mat(itrs_frame.obstime)
+        crepr = tete_coo2.cartesian.transform(pmat)
+        return itrs_frame.realize_frame(crepr)
+    else:
+        # Use the location from the target frame
+        tete_coo2 = tete_coo.transform_to(TETE(obstime=itrs_frame.obstime,
+                                               location=itrs_frame.location))
 
-    # now get the pmatrix
-    pmat = tete_to_itrs_mat(itrs_frame.obstime)
-    crepr = tete_coo2.cartesian.transform(pmat)
-    return itrs_frame.realize_frame(crepr)
+        # now get the pmatrix
+        pmat = tete_to_itrs_mat(itrs_frame.obstime)
+        crepr = tete_coo2.cartesian.transform(pmat)
+        return itrs_frame.realize_frame(crepr)
 
 
 @frame_transform_graph.transform(FunctionTransformWithFiniteDifference, ITRS, TETE)
@@ -161,9 +175,13 @@ def itrs_to_tete(itrs_coo, tete_frame):
     # compute the pmatrix, and then multiply by its transpose
     pmat = tete_to_itrs_mat(itrs_coo.obstime)
     newrepr = itrs_coo.cartesian.transform(matrix_transpose(pmat))
-    tete = TETE(newrepr, obstime=itrs_coo.obstime)
+    # Preserve the location from the source ITRS if target frame doesn't specify one
+    if tete_frame.location == EARTH_CENTER and itrs_coo.location != EARTH_CENTER:
+        tete = TETE(newrepr, obstime=itrs_coo.obstime, location=itrs_coo.location)
+    else:
+        tete = TETE(newrepr, obstime=itrs_coo.obstime)
 
-    # now do any needed offsets (no-op if same obstime)
+    # now do any needed offsets (no-op if same obstime/location)
     return tete.transform_to(tete_frame)
 
 
@@ -196,14 +214,26 @@ def cirs_to_gcrs(cirs_coo, gcrs_frame):
 
 @frame_transform_graph.transform(FunctionTransformWithFiniteDifference, CIRS, ITRS)
 def cirs_to_itrs(cirs_coo, itrs_frame):
-    # first get us to geocentric CIRS at the target obstime
-    cirs_coo2 = cirs_coo.transform_to(CIRS(obstime=itrs_frame.obstime,
-                                           location=EARTH_CENTER))
+    # Get CIRS at the target obstime, preserving the location if the target
+    # frame doesn't specify one
+    if itrs_frame.location == EARTH_CENTER and cirs_coo.location != EARTH_CENTER:
+        # Target frame is geocentric but source is topocentric:
+        # First transform to geocentric CIRS at target obstime
+        cirs_coo2 = cirs_coo.transform_to(CIRS(obstime=itrs_frame.obstime,
+                                               location=EARTH_CENTER))
+        pmat = cirs_to_itrs_mat(itrs_frame.obstime)
+        crepr = cirs_coo2.cartesian.transform(pmat)
+        return itrs_frame.realize_frame(crepr)
+    else:
+        # Use the location from the target frame, or from the source if target doesn't specify
+        # First get us to CIRS at the target obstime and appropriate location
+        cirs_coo2 = cirs_coo.transform_to(CIRS(obstime=itrs_frame.obstime,
+                                               location=itrs_frame.location))
 
-    # now get the pmatrix
-    pmat = cirs_to_itrs_mat(itrs_frame.obstime)
-    crepr = cirs_coo2.cartesian.transform(pmat)
-    return itrs_frame.realize_frame(crepr)
+        # now get the pmatrix
+        pmat = cirs_to_itrs_mat(itrs_frame.obstime)
+        crepr = cirs_coo2.cartesian.transform(pmat)
+        return itrs_frame.realize_frame(crepr)
 
 
 @frame_transform_graph.transform(FunctionTransformWithFiniteDifference, ITRS, CIRS)
@@ -211,9 +241,13 @@ def itrs_to_cirs(itrs_coo, cirs_frame):
     # compute the pmatrix, and then multiply by its transpose
     pmat = cirs_to_itrs_mat(itrs_coo.obstime)
     newrepr = itrs_coo.cartesian.transform(matrix_transpose(pmat))
-    cirs = CIRS(newrepr, obstime=itrs_coo.obstime)
+    # Preserve the location from the source ITRS if target frame doesn't specify one
+    if cirs_frame.location == EARTH_CENTER and itrs_coo.location != EARTH_CENTER:
+        cirs = CIRS(newrepr, obstime=itrs_coo.obstime, location=itrs_coo.location)
+    else:
+        cirs = CIRS(newrepr, obstime=itrs_coo.obstime)
 
-    # now do any needed offsets (no-op if same obstime)
+    # now do any needed offsets (no-op if same obstime/location)
     return cirs.transform_to(cirs_frame)
 
 
@@ -270,6 +304,99 @@ def itrs_to_teme(itrs_coo, teme_frame):
     pmat = teme_to_itrs_mat(teme_frame.obstime)
     newrepr = itrs_coo2.cartesian.transform(matrix_transpose(pmat))
     return teme_frame.realize_frame(newrepr)
+
+
+def itrs_to_observed_mat(observed_frame):
+    lon, lat, height = observed_frame.location.to_geodetic('WGS84')
+    elong = lon.to_value(u.radian)
+    if isinstance(observed_frame, AltAz):
+        elat = lat.to_value(u.radian)
+        minus_x = np.eye(3)
+        minus_x[0][0] = -1.0
+        mat = (minus_x
+               @ rotation_matrix(PIOVER2 - elat, 'y', unit=u.radian)
+               @ rotation_matrix(elong, 'z', unit=u.radian))
+    else:
+        minus_y = np.eye(3)
+        minus_y[1][1] = -1.0
+        mat = (minus_y
+               @ rotation_matrix(elong, 'z', unit=u.radian))
+    return mat
+
+
+@frame_transform_graph.transform(FunctionTransformWithFiniteDifference, ITRS, AltAz)
+@frame_transform_graph.transform(FunctionTransformWithFiniteDifference, ITRS, HADec)
+def itrs_to_observed(itrs_coo, observed_frame):
+    # Check if we need refraction (only AltAz has pressure attribute)
+    needs_refraction = (hasattr(observed_frame, 'pressure') and
+                        np.any(observed_frame.pressure > 0 * u.hPa))
+    
+    if needs_refraction:
+        # Use the CIRS path which handles refraction correctly via ERFA
+        from .cirs import CIRS
+        cirs_frame = CIRS(obstime=observed_frame.obstime,
+                          location=observed_frame.location)
+        cirs_coo = itrs_coo.transform_to(cirs_frame)
+        return cirs_coo.transform_to(observed_frame)
+    
+    # No refraction needed: use direct geometric transformation
+    
+    # If input ITRS has a different location or obstime from target frame,
+    # first synchronize via CIRS (which handles aberration correctly)
+    if (itrs_coo.location != observed_frame.location or
+            itrs_coo.obstime != observed_frame.obstime):
+        # Create a target ITRS frame matching the observed frame's attributes
+        target_itrs = ITRS(obstime=observed_frame.obstime,
+                           location=observed_frame.location)
+        # Transform via CIRS to handle time/location changes correctly
+        itrs_coo = itrs_coo.transform_to(target_itrs)
+    
+    # Now the ITRS coordinate is properly synchronized
+    # If ITRS has a location, the coordinate is already relative to that location
+    if itrs_coo.location == EARTH_CENTER:
+        # Geocentric ITRS: need to subtract observer location
+        topocentric_itrs_repr = (itrs_coo.cartesian
+                                 - observed_frame.location.get_itrs().cartesian)
+    else:
+        # Topocentric ITRS: already relative to the location
+        topocentric_itrs_repr = itrs_coo.cartesian
+    
+    rep = topocentric_itrs_repr.transform(itrs_to_observed_mat(observed_frame))
+    return observed_frame.realize_frame(rep)
+
+
+@frame_transform_graph.transform(FunctionTransformWithFiniteDifference, AltAz, ITRS)
+@frame_transform_graph.transform(FunctionTransformWithFiniteDifference, HADec, ITRS)
+def observed_to_itrs(observed_coo, itrs_frame):
+    # Check if we need to remove refraction (only AltAz has pressure attribute)
+    needs_refraction = (hasattr(observed_coo, 'pressure') and
+                        np.any(observed_coo.pressure > 0 * u.hPa))
+    
+    if needs_refraction:
+        # Use the CIRS path which handles refraction correctly via ERFA
+        from .cirs import CIRS
+        cirs_coo = observed_coo.transform_to(CIRS())
+        return cirs_coo.transform_to(itrs_frame)
+    
+    # No refraction needed: use direct geometric transformation
+    
+    # First transform to geocentric ITRS at the observed frame's time/location
+    topocentric_itrs_repr = observed_coo.cartesian.transform(matrix_transpose(
+                            itrs_to_observed_mat(observed_coo)))
+    # Add observer location to get geocentric ITRS
+    geocentric_repr = topocentric_itrs_repr + observed_coo.location.get_itrs().cartesian
+    
+    # Create a geocentric ITRS coordinate
+    geocentric_itrs = ITRS(geocentric_repr, 
+                           obstime=observed_coo.obstime,
+                           location=EARTH_CENTER)
+    
+    # If target ITRS has different location or obstime, synchronize via CIRS
+    if (itrs_frame.location != EARTH_CENTER or
+            itrs_frame.obstime != observed_coo.obstime):
+        return geocentric_itrs.transform_to(itrs_frame)
+    
+    return itrs_frame.realize_frame(geocentric_repr)
 
 
 # Create loopback transformations

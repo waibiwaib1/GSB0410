@@ -58,10 +58,10 @@ export function getDynamicThemeFixesFor(url: string, frameURL: string, text: str
         },
     });
 
-    if (fixes.length === 0 || fixes[fixes.length - 1].url[0] !== '*') {
+    const genericFix = fixes.find((f) => f.url[0] === '*');
+    if (fixes.length === 0 || !genericFix) {
         return null;
     }
-    const genericFix = fixes[fixes.length - 1];
 
     const common = {
         url: genericFix.url,
@@ -74,7 +74,7 @@ export function getDynamicThemeFixesFor(url: string, frameURL: string, text: str
         common.invert = common.invert.concat('embed[type="application/pdf"]');
     }
     const sortedBySpecificity = fixes
-        .slice(0, fixes.length - 1)
+        .filter((f) => f !== genericFix)
         .map((theme) => {
             return {
                 specificity: isURLInList(frameURL || url, theme.url) ? theme.url[0].length : 0,

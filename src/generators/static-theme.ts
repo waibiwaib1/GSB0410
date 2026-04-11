@@ -268,7 +268,7 @@ function getThemeFor(url: string, staticThemes: string, staticThemesIndex: SiteP
         }
     });
     const sortedBySpecificity = themes
-        .slice(1)
+        .filter((t) => t.url[0] !== '*')
         .map((theme) => {
             return {
                 specificity: isURLInList(url, theme.url) ? theme.url[0].length : 0,

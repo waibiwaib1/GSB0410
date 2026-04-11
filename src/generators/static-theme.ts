@@ -267,8 +267,9 @@ function getThemeFor(url: string, staticThemes: string, staticThemesIndex: SiteP
             return parseArray(value);
         }
     });
+    const genericFixIndex = themes.findIndex(theme => theme.url[0] === '*');
     const sortedBySpecificity = themes
-        .slice(1)
+        .filter((_, i) => i !== genericFixIndex)
         .map((theme) => {
             return {
                 specificity: isURLInList(url, theme.url) ? theme.url[0].length : 0,

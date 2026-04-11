@@ -365,7 +365,7 @@ class DataVariables(Mapping[Any, "DataArray"]):
         )
 
     def __len__(self) -> int:
-        return len(self._dataset._variables) - len(self._dataset._coord_names)
+        return sum(1 for _ in self)
 
     def __contains__(self, key: Hashable) -> bool:
         return key in self._dataset._variables and key not in self._dataset._coord_names
@@ -4139,45 +4139,83 @@ class Dataset(
                 f"{tuple(invalid_coords)} are not coordinates with an index"
             )
 
-        drop_indexes: list[Hashable] = []
-        drop_variables: list[Hashable] = []
-        replaced_indexes: list[PandasMultiIndex] = []
+        indexes_to_drop: set[Hashable] = set()
+        variables_to_drop: set[Hashable] = set()
+        indexes_to_replace: dict[PandasMultiIndex, set[Hashable]] = {}
         new_indexes: dict[Hashable, Index] = {}
-        new_variables: dict[Hashable, IndexVariable] = {}
+        new_variables: dict[Hashable, Variable] = {}
 
         for name in dims_or_levels:
             index = self._indexes[name]
-            drop_indexes += list(self.xindexes.get_all_coords(name))
+            all_coords = list(self.xindexes.get_all_coords(name))
 
-            if isinstance(index, PandasMultiIndex) and name not in self.dims:
-                # special case for pd.MultiIndex (name is an index level):
-                # replace by a new index with dropped level(s) instead of just drop the index
-                if index not in replaced_indexes:
-                    level_names = index.index.names
-                    level_vars = {
-                        k: self._variables[k]
-                        for k in level_names
-                        if k not in dims_or_levels
-                    }
-                    if level_vars:
-                        idx = index.keep_levels(level_vars)
-                        idx_vars = idx.create_variables(level_vars)
-                        new_indexes.update({k: idx for k in idx_vars})
-                        new_variables.update(idx_vars)
-                replaced_indexes.append(index)
+            if isinstance(index, PandasMultiIndex):
+                if index not in indexes_to_replace:
+                    indexes_to_replace[index] = set()
+                indexes_to_replace[index].add(name)
+            else:
+                indexes_to_drop.update(all_coords)
+                if drop:
+                    variables_to_drop.update(all_coords)
 
-            if drop:
-                drop_variables.append(name)
+        for index, reset_names in indexes_to_replace.items():
+            dim = index.dim
+            all_level_names = list(index.index.names)
+            all_coord_names = {dim} | set(all_level_names)
 
-        indexes = {k: v for k, v in self._indexes.items() if k not in drop_indexes}
+            if dim in reset_names and len(reset_names) == 1:
+                indexes_to_drop.update(all_coord_names)
+                if drop:
+                    variables_to_drop.add(dim)
+                else:
+                    if dim in self._variables:
+                        var = self._variables[dim]
+                        new_variables[dim] = var.to_base_variable()
+                continue
+
+            reset_levels = reset_names & set(all_level_names)
+            remaining_level_names = [
+                n for n in all_level_names if n not in reset_levels
+            ]
+
+            indexes_to_drop.update(all_coord_names)
+
+            if remaining_level_names:
+                level_vars = {
+                    k: self._variables[k] for k in remaining_level_names
+                }
+                idx = index.keep_levels(level_vars)
+                idx_vars = idx.create_variables(level_vars)
+                new_indexes.update({k: idx for k in idx_vars})
+                new_variables.update(idx_vars)
+
+            for name in reset_names:
+                if name in self._variables:
+                    if drop:
+                        variables_to_drop.add(name)
+                    else:
+                        var = self._variables[name]
+                        new_variables[name] = var.to_base_variable()
+
+        indexes = {k: v for k, v in self._indexes.items() if k not in indexes_to_drop}
         indexes.update(new_indexes)
 
-        variables = {
-            k: v for k, v in self._variables.items() if k not in drop_variables
-        }
-        variables.update(new_variables)
+        variables: dict[Hashable, Variable] = {}
+        for k, v in self._variables.items():
+            if k in variables_to_drop:
+                continue
+            elif k in new_variables:
+                variables[k] = new_variables[k]
+            elif k in indexes_to_drop and k not in new_indexes:
+                variables[k] = v.to_base_variable()
+            else:
+                variables[k] = v
+        for k, v in new_variables.items():
+            if k not in variables:
+                variables[k] = v
 
-        coord_names = set(new_variables) | self._coord_names
+        coord_names = (self._coord_names - variables_to_drop) | set(new_variables)
+        coord_names = coord_names & variables.keys()
 
         return self._replace(variables, coord_names=coord_names, indexes=indexes)
 

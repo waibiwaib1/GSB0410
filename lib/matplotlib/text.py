@@ -167,6 +167,7 @@ class Text(Artist):
         transform_rotates_text=False,
         linespacing=None,
         rotation_mode=None,
+        antialiased=None,
     ):
         self.set_text(text)
         self.set_color(
@@ -187,6 +188,7 @@ class Text(Artist):
             linespacing = 1.2  # Maybe use rcParam later.
         self.set_linespacing(linespacing)
         self.set_rotation_mode(rotation_mode)
+        self.set_antialiased(antialiased)
 
     def update(self, kwargs):
         # docstring inherited
@@ -322,6 +324,7 @@ class Text(Artist):
         self._transform_rotates_text = other._transform_rotates_text
         self._picker = other._picker
         self._linespacing = other._linespacing
+        self._antialiased = other._antialiased
         self.stale = True
 
     def _get_layout(self, renderer):
@@ -737,6 +740,7 @@ class Text(Artist):
             gc.set_foreground(self.get_color())
             gc.set_alpha(self.get_alpha())
             gc.set_url(self._url)
+            gc.set_antialiased(self.get_antialiased())
             self._set_gc_clip(gc)
 
             angle = self.get_rotation()
@@ -1334,6 +1338,27 @@ class Text(Artist):
 
         """
         return self.set_family(fontname)
+
+    def get_antialiased(self):
+        """Return whether antialiased rendering is used."""
+        return self._antialiased
+
+    def set_antialiased(self, antialiased):
+        """
+        Set whether to use antialiased rendering.
+
+        Parameters
+        ----------
+        antialiased : bool or None
+            If ``True``, use antialiased rendering.
+            If ``False``, do not use antialiased rendering.
+            If ``None``, use the value from :rc:`text.antialiased`.
+        """
+        if antialiased is None:
+            self._antialiased = mpl.rcParams['text.antialiased']
+        else:
+            self._antialiased = bool(antialiased)
+        self.stale = True
 
 
 class OffsetFrom:

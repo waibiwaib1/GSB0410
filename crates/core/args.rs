@@ -691,12 +691,30 @@ impl ArgMatches {
         let res = if self.is_present("fixed-strings") {
             builder.build_literals(patterns)
         } else {
-            builder.build(&patterns.join("|"))
+            // Convert patterns to &[&str] and use build_many
+            let pattern_refs: Vec<_> = patterns.iter().map(|p| p.as_str()).collect();
+            builder.build_many(&pattern_refs)
         };
         match res {
             Ok(m) => Ok(m),
             Err(err) => Err(From::from(suggest_multiline(err.to_string()))),
         }
+    }
+
+    /// Determine whether the pattern contains an uppercase character which should
+    /// negate the effect of the smart-case option.
+    ///
+    /// This is copied from crates/pcre2/src/matcher.rs
+    fn has_uppercase_literal(pattern: &str) -> bool {
+        let mut chars = pattern.chars();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                chars.next();
+            } else if c.is_uppercase() {
+                return true;
+            }
+        }
+        false
     }
 
     /// Build a matcher using PCRE2.
@@ -707,8 +725,6 @@ impl ArgMatches {
     fn matcher_pcre2(&self, patterns: &[String]) -> Result<PCRE2RegexMatcher> {
         let mut builder = PCRE2RegexMatcherBuilder::new();
         builder
-            .case_smart(self.case_smart())
-            .caseless(self.case_insensitive())
             .multi_line(true)
             .word(self.is_present("word-regexp"));
         // For whatever reason, the JIT craps out during regex compilation with
@@ -738,7 +754,23 @@ impl ArgMatches {
         if self.is_present("crlf") {
             builder.crlf(true);
         }
-        Ok(builder.build(&patterns.join("|"))?)
+
+        // Now, process each pattern individually for case handling
+        let case_insensitive = self.case_insensitive();
+        let case_smart = self.case_smart();
+        let mut processed_patterns = Vec::with_capacity(patterns.len());
+        for pattern in patterns {
+            let should_be_case_insensitive = 
+                case_insensitive 
+                || (case_smart && !has_uppercase_literal(pattern));
+            if should_be_case_insensitive {
+                processed_patterns.push(format!("(?i:{})", pattern));
+            } else {
+                processed_patterns.push(pattern.clone());
+            }
+        }
+
+        Ok(builder.build(&processed_patterns.join("|"))?)
     }
 
     /// Build a JSON printer that writes results to the given writer.

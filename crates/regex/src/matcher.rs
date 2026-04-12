@@ -4,6 +4,7 @@ use grep_matcher::{
     ByteSet, Captures, LineMatchKind, LineTerminator, Match, Matcher, NoError,
 };
 use regex::bytes::{CaptureLocations, Regex};
+use regex_syntax::hir::Hir;
 
 use crate::config::{Config, ConfiguredHIR};
 use crate::crlf::CRLFMatcher;
@@ -43,14 +44,39 @@ impl RegexMatcherBuilder {
     /// The syntax supported is documented as part of the regex crate:
     /// <https://docs.rs/regex/#syntax>.
     pub fn build(&self, pattern: &str) -> Result<RegexMatcher, Error> {
-        let chir = self.config.hir(pattern)?;
-        let fast_line_regex = chir.fast_line_regex()?;
-        let non_matching_bytes = chir.non_matching_bytes();
+        self.build_many(&[pattern])
+    }
+
+    /// Build a new matcher from multiple patterns, where each pattern is
+    /// analyzed separately (e.g., for smart case).
+    pub fn build_many(&self, patterns: &[&str]) -> Result<RegexMatcher, Error> {
+        // First, generate a ConfiguredHIR for each pattern separately
+        let mut hirs = Vec::with_capacity(patterns.len());
+        for pattern in patterns {
+            let chir = self.config.hir(pattern)?;
+            hirs.push(chir);
+        }
+
+        // Now, combine all HIRs into a single alternation
+        let combined_hir = if hirs.len() == 1 {
+            hirs[0].clone()
+        } else {
+            let exprs: Vec<_> = hirs.iter().map(|h| h.expr.clone()).collect();
+            let combined_expr = Hir::alternation(exprs);
+            
+            // Use the first ConfiguredHIR as base, but with the combined expr
+            // and updated original pattern string
+            let first_chir = &hirs[0];
+            first_chir.with_expr_and_original(combined_expr, patterns.join("|"))
+        };
+
+        let fast_line_regex = combined_hir.fast_line_regex()?;
+        let non_matching_bytes = combined_hir.non_matching_bytes();
         if let Some(ref re) = fast_line_regex {
             log::debug!("extracted fast line regex: {:?}", re);
         }
 
-        let matcher = RegexMatcherImpl::new(&chir)?;
+        let matcher = RegexMatcherImpl::new(&combined_hir)?;
         log::trace!("final regex: {:?}", matcher.regex());
         Ok(RegexMatcher {
             config: self.config.clone(),

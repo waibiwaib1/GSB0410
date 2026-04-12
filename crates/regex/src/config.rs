@@ -162,6 +162,23 @@ impl ConfiguredHIR {
         &self.config
     }
 
+    /// Create a new ConfiguredHIR with the given HIR expression, keeping
+    /// all other fields (config, analysis, original) the same.
+    pub fn with_expr(&self, expr: Hir) -> ConfiguredHIR {
+        self.with_expr_and_original(expr, self.original.clone())
+    }
+
+    /// Create a new ConfiguredHIR with the given HIR expression and original
+    /// pattern string, keeping all other fields (config, analysis) the same.
+    pub fn with_expr_and_original(&self, expr: Hir, original: String) -> ConfiguredHIR {
+        ConfiguredHIR {
+            original,
+            config: self.config.clone(),
+            analysis: self.analysis.clone(),
+            expr,
+        }
+    }
+
     /// Compute the set of non-matching bytes for this HIR expression.
     pub fn non_matching_bytes(&self) -> ByteSet {
         non_matching_bytes(&self.expr)

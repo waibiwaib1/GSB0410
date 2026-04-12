@@ -4,8 +4,6 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process;
 
-use clap::Shell;
-
 use app::{RGArg, RGArgKind};
 
 #[allow(dead_code)]
@@ -36,13 +34,9 @@ fn main() {
         eprintln!("failed to generate man page: {}", err);
     }
 
-    // Use clap to build completion files.
-    let mut app = app::app();
-    app.gen_completions("rg", Shell::Bash, &outdir);
-    app.gen_completions("rg", Shell::Fish, &outdir);
-    app.gen_completions("rg", Shell::PowerShell, &outdir);
-    // Note that we do not use clap's support for zsh. Instead, zsh completions
-    // are manually maintained in `complete/_rg`.
+    if let Err(err) = generate_shell_completions(&outdir) {
+        eprintln!("failed to generate shell completions: {}", err);
+    }
 
     // Make the current git hash available to the build.
     if let Some(rev) = git_revision_hash() {
@@ -260,6 +254,211 @@ fn formatted_doc_txt(arg: &RGArg) -> io::Result<String> {
         return Ok(first);
     }
     Ok(format!("{}\n+\n{}", first, paragraphs[1..].join("\n+\n")))
+}
+
+fn generate_shell_completions<P: AsRef<Path>>(outdir: P) -> io::Result<()> {
+    let outdir = outdir.as_ref();
+    let args = app::all_args_and_flags();
+
+    let mut switches = vec![];
+    let mut flags = vec![];
+    for arg in &args {
+        if arg.hidden {
+            continue;
+        }
+        match &arg.kind {
+            RGArgKind::Switch { long, short, .. } => {
+                switches.push((*long, *short));
+            }
+            RGArgKind::Flag { long, short, .. } => {
+                flags.push((*long, *short));
+            }
+            RGArgKind::Positional { .. } => {}
+        }
+    }
+
+    generate_bash_completion(outdir, &switches, &flags)?;
+    generate_fish_completion(outdir, &switches, &flags)?;
+    generate_powershell_completion(outdir, &switches, &flags)?;
+
+    Ok(())
+}
+
+fn generate_bash_completion(
+    outdir: &Path,
+    switches: &[(&str, Option<char>)],
+    flags: &[(&str, Option<char>)],
+) -> io::Result<()> {
+    let mut out = String::new();
+    out.push_str("_rg() {\n");
+    out.push_str("  local cur prev opts\n");
+    out.push_str("  COMPREPLY=()\n");
+    out.push_str("  cur=\"${COMP_WORDS[COMP_CWORD]}\"\n");
+    out.push_str("  prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n");
+    out.push_str("\n");
+    out.push_str("  local switches=\"");
+    for (long, short) in switches {
+        out.push_str("--");
+        out.push_str(long);
+        out.push_str(" ");
+        if let Some(s) = short {
+            out.push_str("-");
+            out.push(*s);
+            out.push_str(" ");
+        }
+    }
+    out.push_str("\"\n");
+    out.push_str("\n");
+    out.push_str("  local flag_opts=\"");
+    for (long, short) in flags {
+        out.push_str("--");
+        out.push_str(long);
+        out.push_str(" ");
+        if let Some(s) = short {
+            out.push_str("-");
+            out.push(*s);
+            out.push_str(" ");
+        }
+    }
+    out.push_str("\"\n");
+    out.push_str("\n");
+    out.push_str("  if [[ ${cur} == -* ]] ; then\n");
+    out.push_str("    COMPREPLY=( $(compgen -W \"${switches} ${flag_opts}\" -- ${cur}) )\n");
+    out.push_str("    return 0\n");
+    out.push_str("  fi\n");
+    out.push_str("\n");
+    out.push_str("  case ${prev} in\n");
+    for (long, short) in flags {
+        out.push_str("    --");
+        out.push_str(long);
+        out.push_str("|");
+        if let Some(s) = short {
+            out.push_str("-");
+            out.push(*s);
+        } else {
+            out.push_str("--");
+            out.push_str(long);
+        }
+        out.push_str(")\n");
+        out.push_str("      return 0\n");
+        out.push_str("      ;;\n");
+    }
+    out.push_str("    *)\n");
+    out.push_str("      ;;\n");
+    out.push_str("  esac\n");
+    out.push_str("\n");
+    out.push_str("  COMPREPLY=( $(compgen -f -- ${cur}) )\n");
+    out.push_str("  return 0\n");
+    out.push_str("}\n");
+    out.push_str("complete -F _rg rg\n");
+
+    let path = outdir.join("rg.bash");
+    File::create(&path)?.write_all(out.as_bytes())?;
+    Ok(())
+}
+
+fn generate_fish_completion(
+    outdir: &Path,
+    switches: &[(&str, Option<char>)],
+    flags: &[(&str, Option<char>)],
+) -> io::Result<()> {
+    let mut out = String::new();
+    out.push_str("complete -c rg -f\n");
+    for (long, short) in switches {
+        out.push_str("complete -c rg -n '__fish_use_subcommand' -l ");
+        out.push_str(long);
+        if let Some(s) = short {
+            out.push_str(" -s ");
+            out.push(*s);
+        }
+        out.push_str("\n");
+    }
+    for (long, short) in flags {
+        out.push_str("complete -c rg -n '__fish_use_subcommand' -l ");
+        out.push_str(long);
+        if let Some(s) = short {
+            out.push_str(" -s ");
+            out.push(*s);
+        }
+        out.push_str(" -r\n");
+    }
+
+    let path = outdir.join("rg.fish");
+    File::create(&path)?.write_all(out.as_bytes())?;
+    Ok(())
+}
+
+fn generate_powershell_completion(
+    outdir: &Path,
+    switches: &[(&str, Option<char>)],
+    flags: &[(&str, Option<char>)],
+) -> io::Result<()> {
+    let mut out = String::new();
+    out.push_str("using namespace System.Management.Automation\n");
+    out.push_str("using namespace System.Management.Automation.Language\n");
+    out.push_str("\n");
+    out.push_str("Register-ArgumentCompleter -CommandName rg -ScriptBlock {\n");
+    out.push_str("    param($wordToComplete, $commandAst, $cursorPosition)\n");
+    out.push_str("\n");
+    out.push_str("    $commandElements = $commandAst.CommandElements\n");
+    out.push_str("    $command = @(\n");
+    out.push_str("        'rg'\n");
+    out.push_str("        for ($i = 1; $i -lt $commandElements.Count; $i++) {\n");
+    out.push_str("            $element = $commandElements[$i]\n");
+    out.push_str("            if ($element -isnot [StringConstantExpressionAst]) {\n");
+    out.push_str("                break\n");
+    out.push_str("            }\n");
+    out.push_str("            if ($element.Value.StartsWith('-') -and $element.Value -notmatch '^--?$') {\n");
+    out.push_str("                break\n");
+    out.push_str("            }\n");
+    out.push_str("        }\n");
+    out.push_str("    ) -join ' '\n");
+    out.push_str("\n");
+    out.push_str("    $completions = @(\n");
+    for (long, short) in switches {
+        if let Some(s) = short {
+            out.push_str("        [CompletionResult]::new('-");
+            out.push(*s);
+            out.push_str("', '-");
+            out.push(*s);
+            out.push_str("', [CompletionResultType]::ParameterName, '--");
+            out.push_str(long);
+            out.push_str("')\n");
+        }
+        out.push_str("        [CompletionResult]::new('--");
+        out.push_str(long);
+        out.push_str("', '--");
+        out.push_str(long);
+        out.push_str("', [CompletionResultType]::ParameterName, '--");
+        out.push_str(long);
+        out.push_str("')\n");
+    }
+    for (long, short) in flags {
+        if let Some(s) = short {
+            out.push_str("        [CompletionResult]::new('-");
+            out.push(*s);
+            out.push_str("', '-");
+            out.push(*s);
+            out.push_str("', [CompletionResultType]::ParameterName, '--");
+            out.push_str(long);
+            out.push_str("')\n");
+        }
+        out.push_str("        [CompletionResult]::new('--");
+        out.push_str(long);
+        out.push_str("', '--");
+        out.push_str(long);
+        out.push_str("', [CompletionResultType]::ParameterName, '--");
+        out.push_str(long);
+        out.push_str("')\n");
+    }
+    out.push_str("    )\n");
+    out.push_str("\n");
+    out.push_str("    $completions.Where{ $_.CompletionText -like \"$wordToComplete*\" }\n");
+    out.push_str("}\n");
+
+    let path = outdir.join("_rg.ps1");
+    File::create(&path)?.write_all(out.as_bytes())?;
+    Ok(())
 }
 
 fn ioerr(msg: String) -> io::Error {

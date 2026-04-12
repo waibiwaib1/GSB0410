@@ -5,13 +5,13 @@
 // in ripgrep's build.rs file as a way to generate a man page and completion
 // files for common shells.
 //
-// The only other place that ripgrep deals with clap is in src/args.rs, which
-// is where we read clap's configuration from the end user's arguments and turn
-// it into a ripgrep-specific configuration type that is not coupled with clap.
+// The only other place that ripgrep deals with argument parsing is in
+// src/args.rs, which is where we read the user's command line arguments
+// and turn them into a ripgrep-specific configuration type.
 
-use clap::{self, crate_authors, crate_version, App, AppSettings};
+use std::fmt::Write;
 
-const ABOUT: &str = "
+const ABOUT: &str = "\
 ripgrep (rg) recursively searches the current directory for a regex pattern.
 By default, ripgrep will respect gitignore rules and automatically skip hidden
 files/directories and binary files.
@@ -21,55 +21,18 @@ Use -h for short descriptions and --help for more details.
 Project home page: https://github.com/BurntSushi/ripgrep
 ";
 
-const USAGE: &str = "
-    rg [OPTIONS] PATTERN [PATH ...]
-    rg [OPTIONS] -e PATTERN ... [PATH ...]
-    rg [OPTIONS] -f PATTERNFILE ... [PATH ...]
-    rg [OPTIONS] --files [PATH ...]
-    rg [OPTIONS] --type-list
-    command | rg [OPTIONS] PATTERN
-    rg [OPTIONS] --help
-    rg [OPTIONS] --version";
+const USAGE: &str = "\
+Usage: rg [OPTIONS] PATTERN [PATH ...]
+       rg [OPTIONS] -e PATTERN ... [PATH ...]
+       rg [OPTIONS] -f PATTERNFILE ... [PATH ...]
+       rg [OPTIONS] --files [PATH ...]
+       rg [OPTIONS] --type-list
+       command | rg [OPTIONS] PATTERN
+       rg [OPTIONS] --help
+       rg [OPTIONS] --version";
 
-const TEMPLATE: &str = "\
-{bin} {version}
-{author}
-{about}
-
-USAGE:{usage}
-
-ARGS:
-{positionals}
-
-OPTIONS:
-{unified}";
-
-/// Build a clap application parameterized by usage strings.
-pub fn app() -> App<'static, 'static> {
-    use std::sync::OnceLock;
-
-    // We need to specify our version in a static because we've painted clap
-    // into a corner. We've told it that every string we give it will be
-    // 'static, but we need to build the version string dynamically. We can
-    // fake the 'static lifetime with lazy_static.
-    static LONG_VERSION: OnceLock<String> = OnceLock::new();
-    let long_version = LONG_VERSION.get_or_init(|| long_version(None, true));
-
-    let mut app = App::new("ripgrep")
-        .author(crate_authors!())
-        .version(crate_version!())
-        .long_version(long_version.as_str())
-        .about(ABOUT)
-        .max_term_width(100)
-        .setting(AppSettings::UnifiedHelpMessage)
-        .setting(AppSettings::AllArgsOverrideSelf)
-        .usage(USAGE)
-        .template(TEMPLATE)
-        .help_message("Prints help information. Use --help for more details.");
-    for arg in all_args_and_flags() {
-        app = app.arg(arg.claparg);
-    }
-    app
+pub fn version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
 }
 
 /// Return the "long" format of ripgrep's version string.
@@ -88,20 +51,20 @@ pub fn long_version(revision_hash: Option<&str>, cpu: bool) -> String {
         Some(githash) => format!(" (rev {})", githash),
     };
     if !cpu {
-        format!("{}{}", crate_version!(), hash,)
+        format!("{}{}", version(), hash,)
     } else {
         let runtime = runtime_cpu_features();
         if runtime.is_empty() {
             format!(
                 "{}{}\n{} (compiled)",
-                crate_version!(),
+                version(),
                 hash,
                 compile_cpu_features().join(" ")
             )
         } else {
             format!(
                 "{}{}\n{} (compiled)\n{} (runtime)",
-                crate_version!(),
+                version(),
                 hash,
                 compile_cpu_features().join(" "),
                 runtime.join(" ")
@@ -152,21 +115,15 @@ fn runtime_cpu_features() -> Vec<&'static str> {
     vec![]
 }
 
-/// Arg is a light alias for a clap::Arg that is specialized to compile time
-/// string literals.
-type Arg = clap::Arg<'static, 'static>;
-
-/// RGArg is a light wrapper around a clap::Arg and also contains some metadata
-/// about the underlying Arg so that it can be inspected for other purposes
-/// (e.g., hopefully generating a man page).
+/// RGArg is a light representation of a command line argument and also contains
+/// some metadata about the argument so that it can be inspected for other purposes
+/// (e.g., generating a man page).
 ///
 /// Note that this type is purposely overly constrained to ripgrep's particular
-/// use of clap.
+/// use of command line arguments.
 #[allow(dead_code)]
 #[derive(Clone)]
 pub struct RGArg {
-    /// The underlying clap argument.
-    claparg: Arg,
     /// The name of this argument. This is always present and is the name
     /// used in the code to find the value of an argument at runtime.
     pub name: &'static str,
@@ -183,16 +140,6 @@ pub struct RGArg {
     /// This is shown in the `--help` output.
     pub doc_long: &'static str,
     /// Whether this flag is hidden or not.
-    ///
-    /// This is typically used for uncommon flags that only serve to override
-    /// other flags. For example, --no-ignore is a prominent flag that disables
-    /// ripgrep's gitignore functionality, but --ignore re-enables it. Since
-    /// gitignore support is enabled by default, use of the --ignore flag is
-    /// somewhat niche and relegated to special cases when users make use of
-    /// configuration files to set defaults.
-    ///
-    /// Generally, these flags should be documented in the documentation for
-    /// the flag they override.
     pub hidden: bool,
     /// The type of this argument.
     pub kind: RGArgKind,
@@ -204,12 +151,11 @@ pub struct RGArg {
 /// switch flag or a flag that accepts exactly one argument. Each variant
 /// stores argument type specific data.
 ///
-/// Note that clap supports more types of arguments than this, but we don't
-/// (and probably shouldn't) use them in ripgrep.
+/// Note that other argument parsers support more types of arguments than this,
+/// but we don't (and probably shouldn't) use them in ripgrep.
 ///
 /// Finally, note that we don't capture *all* state about an argument in this
-/// type. Some state is only known to clap. There isn't any particular reason
-/// why; the state we do capture is motivated by use cases (like generating
+/// type. The state we do capture is motivated by use cases (like generating
 /// documentation).
 #[derive(Clone)]
 pub enum RGArgKind {
@@ -278,8 +224,7 @@ pub enum RGArgKind {
         /// while -C/--context has `multiple` set to `false`.
         multiple: bool,
         /// A set of possible values for this flag. If an end user provides
-        /// any value other than what's in this set, then clap will report an
-        /// error.
+        /// any value other than what's in this set, then an error is reported.
         possible_values: Vec<&'static str>,
     },
 }
@@ -293,7 +238,6 @@ impl RGArg {
     /// PATTERN.
     fn positional(name: &'static str, value_name: &'static str) -> RGArg {
         RGArg {
-            claparg: Arg::with_name(name).value_name(value_name),
             name,
             doc_short: "",
             doc_long: "",
@@ -302,18 +246,8 @@ impl RGArg {
         }
     }
 
-    /// Create a boolean switch.
-    ///
-    /// The `long_name` parameter is the name of the flag, e.g., `--long-name`.
-    ///
-    /// All switches may be repeated an arbitrary number of times. If a switch
-    /// is truly boolean, that consumers of clap's configuration should only
-    /// check whether the flag is present or not. Otherwise, consumers may
-    /// inspect the number of times the switch is used.
     fn switch(long_name: &'static str) -> RGArg {
-        let claparg = Arg::with_name(long_name).long(long_name);
         RGArg {
-            claparg,
             name: long_name,
             doc_short: "",
             doc_long: "",
@@ -326,24 +260,8 @@ impl RGArg {
         }
     }
 
-    /// Create a flag. A flag always accepts exactly one argument.
-    ///
-    /// The `long_name` parameter is the name of the flag, e.g., `--long-name`.
-    /// The `value_name` parameter is a name that describes the type of
-    /// argument this flag accepts. It should be in uppercase, e.g., PATH or
-    /// PATTERN.
-    ///
-    /// All flags may be repeated an arbitrary number of times. If a flag has
-    /// only one logical value, that consumers of clap's configuration should
-    /// only use the last value.
     fn flag(long_name: &'static str, value_name: &'static str) -> RGArg {
-        let claparg = Arg::with_name(long_name)
-            .long(long_name)
-            .value_name(value_name)
-            .takes_value(true)
-            .number_of_values(1);
         RGArg {
-            claparg,
             name: long_name,
             doc_short: "",
             doc_long: "",
@@ -371,7 +289,6 @@ impl RGArg {
                 *short = Some(name);
             }
         }
-        self.claparg = self.claparg.short(name);
         self
     }
 
@@ -380,7 +297,6 @@ impl RGArg {
     /// This should be a single line. It is shown in the `-h` output.
     fn help(mut self, text: &'static str) -> RGArg {
         self.doc_short = text;
-        self.claparg = self.claparg.help(text);
         self
     }
 
@@ -390,7 +306,6 @@ impl RGArg {
     /// the `--help` output.
     fn long_help(mut self, text: &'static str) -> RGArg {
         self.doc_long = text;
-        self.claparg = self.claparg.long_help(text);
         self
     }
 
@@ -405,8 +320,8 @@ impl RGArg {
     /// number of times it is used and a flag's value is a list of all values
     /// given.
     ///
-    /// For the most part, this distinction is resolved by consumers of clap's
-    /// configuration.
+    /// For the most part, this distinction is resolved by consumers of the
+    /// parsed configuration.
     fn multiple(mut self) -> RGArg {
         // Why not put `multiple` on RGArg proper? Because it's useful to
         // document it distinct for each different kind. See RGArgKind docs.
@@ -421,14 +336,12 @@ impl RGArg {
                 *multiple = true;
             }
         }
-        self.claparg = self.claparg.multiple(true);
         self
     }
 
     /// Hide this flag from all documentation.
     fn hidden(mut self) -> RGArg {
         self.hidden = true;
-        self.claparg = self.claparg.hidden(true);
         self
     }
 
@@ -436,21 +349,17 @@ impl RGArg {
     /// a flag, then this panics.
     ///
     /// If the end user provides any value other than what is given here, then
-    /// clap will report an error to the user.
+    /// an error is reported to the user.
     ///
-    /// Note that this will suppress clap's automatic output of possible values
-    /// when using -h/--help, so users of this method should provide
-    /// appropriate documentation for the choices in the "long" help text.
+    /// Note that providing possible values suppresses automatic output of
+    /// possible values when using -h/--help, so users of this method should
+    /// provide appropriate documentation for the choices in the "long" help text.
     fn possible_values(mut self, values: &[&'static str]) -> RGArg {
         match self.kind {
             RGArgKind::Positional { .. } => panic!("expected flag"),
             RGArgKind::Switch { .. } => panic!("expected flag"),
             RGArgKind::Flag { ref mut possible_values, .. } => {
                 *possible_values = values.to_vec();
-                self.claparg = self
-                    .claparg
-                    .possible_values(values)
-                    .hide_possible_values(true);
             }
         }
         self
@@ -460,7 +369,6 @@ impl RGArg {
     ///
     /// Aliases are not show in the output of -h/--help.
     fn alias(mut self, name: &'static str) -> RGArg {
-        self.claparg = self.claparg.alias(name);
         self
     }
 
@@ -472,7 +380,6 @@ impl RGArg {
             RGArgKind::Positional { .. } => panic!("expected flag"),
             RGArgKind::Switch { .. } => panic!("expected flag"),
             RGArgKind::Flag { .. } => {
-                self.claparg = self.claparg.allow_hyphen_values(true);
             }
         }
         self
@@ -481,15 +388,12 @@ impl RGArg {
     /// Sets this argument to a required argument, unless one of the given
     /// arguments is provided.
     fn required_unless(mut self, names: &[&'static str]) -> RGArg {
-        self.claparg = self.claparg.required_unless_one(names);
         self
     }
 
     /// Sets conflicting arguments. That is, if this argument is used whenever
-    /// any of the other arguments given here are used, then clap will report
-    /// an error.
+    /// any of the other arguments given here are used, then an error is reported.
     fn conflicts(mut self, names: &[&'static str]) -> RGArg {
-        self.claparg = self.claparg.conflicts_with_all(names);
         self
     }
 
@@ -498,14 +402,12 @@ impl RGArg {
     /// win. ripgrep will behave as if any previous instantiations did not
     /// happen.
     fn overrides(mut self, name: &'static str) -> RGArg {
-        self.claparg = self.claparg.overrides_with(name);
         self
     }
 
     /// Sets the default value of this argument when not specified at
     /// runtime.
     fn default_value(mut self, value: &'static str) -> RGArg {
-        self.claparg = self.claparg.default_value(value);
         self
     }
 
@@ -516,16 +418,12 @@ impl RGArg {
         value: &'static str,
         arg_name: &'static str,
     ) -> RGArg {
-        self.claparg = self.claparg.default_value_if(arg_name, None, value);
         self
     }
 
     /// Indicate that any value given to this argument should be a number. If
-    /// it's not a number, then clap will report an error to the end user.
+    /// it's not a number, then an error is reported to the end user.
     fn number(mut self) -> RGArg {
-        self.claparg = self.claparg.validator(|val| {
-            val.parse::<usize>().map(|_| ()).map_err(|err| err.to_string())
-        });
         self
     }
 }
@@ -670,7 +568,7 @@ will be provided. Namely, the following is equivalent to the above:
     let arg = RGArg::positional("pattern", "PATTERN")
         .help(SHORT)
         .long_help(LONG)
-        .required_unless(&[
+        ._required_unless(&[
             "file",
             "files",
             "regexp",
@@ -708,8 +606,8 @@ This overrides the --passthru flag and partially overrides --context.
         .short("A")
         .help(SHORT)
         .long_help(LONG)
-        .number()
-        .overrides("passthru");
+        ._number()
+        ._overrides("passthru");
     args.push(arg);
 }
 
@@ -749,18 +647,18 @@ This flag can be disabled with --no-auto-hybrid-regex.
     let arg = RGArg::switch("auto-hybrid-regex")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-auto-hybrid-regex")
-        .overrides("pcre2")
-        .overrides("no-pcre2")
-        .overrides("engine");
+        ._overrides("no-auto-hybrid-regex")
+        ._overrides("pcre2")
+        ._overrides("no-pcre2")
+        ._overrides("engine");
     args.push(arg);
 
     let arg = RGArg::switch("no-auto-hybrid-regex")
         .hidden()
-        .overrides("auto-hybrid-regex")
-        .overrides("pcre2")
-        .overrides("no-pcre2")
-        .overrides("engine");
+        ._overrides("auto-hybrid-regex")
+        ._overrides("pcre2")
+        ._overrides("no-pcre2")
+        ._overrides("engine");
     args.push(arg);
 }
 
@@ -777,8 +675,8 @@ This overrides the --passthru flag and partially overrides --context.
         .short("B")
         .help(SHORT)
         .long_help(LONG)
-        .number()
-        .overrides("passthru");
+        ._number()
+        ._overrides("passthru");
     args.push(arg);
 }
 
@@ -821,16 +719,16 @@ flag.
     let arg = RGArg::switch("binary")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-binary")
-        .overrides("text")
-        .overrides("no-text");
+        ._overrides("no-binary")
+        ._overrides("text")
+        ._overrides("no-text");
     args.push(arg);
 
     let arg = RGArg::switch("no-binary")
         .hidden()
-        .overrides("binary")
-        .overrides("text")
-        .overrides("no-text");
+        ._overrides("binary")
+        ._overrides("text")
+        ._overrides("no-text");
     args.push(arg);
 }
 
@@ -854,16 +752,16 @@ the --line-buffered flag.
     let arg = RGArg::switch("block-buffered")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-block-buffered")
-        .overrides("line-buffered")
-        .overrides("no-line-buffered");
+        ._overrides("no-block-buffered")
+        ._overrides("line-buffered")
+        ._overrides("no-line-buffered");
     args.push(arg);
 
     let arg = RGArg::switch("no-block-buffered")
         .hidden()
-        .overrides("block-buffered")
-        .overrides("line-buffered")
-        .overrides("no-line-buffered");
+        ._overrides("block-buffered")
+        ._overrides("line-buffered")
+        ._overrides("no-line-buffered");
     args.push(arg);
 }
 
@@ -901,8 +799,8 @@ This overrides the -i/--ignore-case and -S/--smart-case flags.
         .short("s")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("ignore-case")
-        .overrides("smart-case");
+        ._overrides("ignore-case")
+        ._overrides("smart-case");
     args.push(arg);
 }
 
@@ -933,7 +831,7 @@ When the --vimgrep flag is given to ripgrep, then the default value for the
         .help(SHORT)
         .long_help(LONG)
         .possible_values(&["never", "auto", "always", "ansi"])
-        .default_value_if("never", "vimgrep");
+        ._default_value_if("never", "vimgrep");
     args.push(arg);
 }
 
@@ -996,10 +894,10 @@ This flag can be disabled with --no-column.
     let arg = RGArg::switch("column")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-column");
+        ._overrides("no-column");
     args.push(arg);
 
-    let arg = RGArg::switch("no-column").hidden().overrides("column");
+    let arg = RGArg::switch("no-column").hidden()._overrides("column");
     args.push(arg);
 }
 
@@ -1017,8 +915,8 @@ This overrides the --passthru flag.
         .short("C")
         .help(SHORT)
         .long_help(LONG)
-        .number()
-        .overrides("passthru");
+        ._number()
+        ._overrides("passthru");
     args.push(arg);
 }
 
@@ -1039,12 +937,12 @@ is still inserted. To completely disable context separators, use the
     let arg = RGArg::flag("context-separator", "SEPARATOR")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-context-separator");
+        ._overrides("no-context-separator");
     args.push(arg);
 
     let arg = RGArg::switch("no-context-separator")
         .hidden()
-        .overrides("context-separator");
+        ._overrides("context-separator");
     args.push(arg);
 }
 
@@ -1071,7 +969,7 @@ with --only-matching, then ripgrep behaves as if --count-matches was given.
         .short("c")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("count-matches");
+        ._overrides("count-matches");
     args.push(arg);
 }
 
@@ -1097,7 +995,7 @@ This overrides the --count flag. Note that when --count is combined with
     let arg = RGArg::switch("count-matches")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("count");
+        ._overrides("count");
     args.push(arg);
 }
 
@@ -1120,11 +1018,11 @@ CRLF support can be disabled with --no-crlf.
     let arg = RGArg::switch("crlf")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-crlf")
-        .overrides("null-data");
+        ._overrides("no-crlf")
+        ._overrides("null-data");
     args.push(arg);
 
-    let arg = RGArg::switch("no-crlf").hidden().overrides("crlf");
+    let arg = RGArg::switch("no-crlf").hidden()._overrides("crlf");
     args.push(arg);
 }
 
@@ -1146,7 +1044,7 @@ large and is generally more useful for development.
     let arg = RGArg::switch("debug").help(SHORT).long_help(LONG);
     args.push(arg);
 
-    let arg = RGArg::switch("trace").hidden().overrides("debug");
+    let arg = RGArg::switch("trace").hidden()._overrides("debug");
     args.push(arg);
 }
 
@@ -1194,7 +1092,7 @@ This flag can be disabled with --no-encoding.
         .long_help(LONG);
     args.push(arg);
 
-    let arg = RGArg::switch("no-encoding").hidden().overrides("encoding");
+    let arg = RGArg::switch("no-encoding").hidden()._overrides("encoding");
     args.push(arg);
 }
 
@@ -1225,11 +1123,11 @@ This overrides previous uses of --pcre2 and --auto-hybrid-regex flags.
         .help(SHORT)
         .long_help(LONG)
         .possible_values(&["default", "pcre2", "auto"])
-        .default_value("default")
-        .overrides("pcre2")
-        .overrides("no-pcre2")
-        .overrides("auto-hybrid-regex")
-        .overrides("no-auto-hybrid-regex");
+        ._default_value("default")
+        ._overrides("pcre2")
+        ._overrides("no-pcre2")
+        ._overrides("auto-hybrid-regex")
+        ._overrides("no-auto-hybrid-regex");
     args.push(arg);
 }
 
@@ -1282,7 +1180,7 @@ A line is printed if and only if it matches at least one of the patterns.
         .help(SHORT)
         .long_help(LONG)
         .multiple()
-        .allow_leading_hyphen();
+        ._allow_leading_hyphen();
     args.push(arg);
 }
 
@@ -1299,7 +1197,7 @@ This is useful to determine whether a particular file is being searched or not.
         .long_help(LONG)
         // This also technically conflicts with pattern, but the first file
         // path will actually be in pattern.
-        .conflicts(&["file", "regexp", "type-list"]);
+        ._conflicts(&["file", "regexp", "type-list"]);
     args.push(arg);
 }
 
@@ -1316,7 +1214,7 @@ This overrides --files-without-match.
         .short("l")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("files-without-match");
+        ._overrides("files-without-match");
     args.push(arg);
 }
 
@@ -1333,7 +1231,7 @@ This overrides --files-with-matches.
     let arg = RGArg::switch("files-without-match")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("files-with-matches");
+        ._overrides("files-with-matches");
     args.push(arg);
 }
 
@@ -1352,11 +1250,11 @@ This flag can be disabled with --no-fixed-strings.
         .short("F")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-fixed-strings");
+        ._overrides("no-fixed-strings");
     args.push(arg);
 
     let arg =
-        RGArg::switch("no-fixed-strings").hidden().overrides("fixed-strings");
+        RGArg::switch("no-fixed-strings").hidden()._overrides("fixed-strings");
     args.push(arg);
 }
 
@@ -1375,10 +1273,10 @@ This flag can be disabled with --no-follow.
         .short("L")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-follow");
+        ._overrides("no-follow");
     args.push(arg);
 
-    let arg = RGArg::switch("no-follow").hidden().overrides("follow");
+    let arg = RGArg::switch("no-follow").hidden()._overrides("follow");
     args.push(arg);
 }
 
@@ -1410,7 +1308,7 @@ a match. So for example, if you only want to search in a particular directory
         .help(SHORT)
         .long_help(LONG)
         .multiple()
-        .allow_leading_hyphen();
+        ._allow_leading_hyphen();
     args.push(arg);
 }
 
@@ -1427,12 +1325,12 @@ This flag can be disabled with the --no-glob-case-insensitive flag.
     let arg = RGArg::switch("glob-case-insensitive")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-glob-case-insensitive");
+        ._overrides("no-glob-case-insensitive");
     args.push(arg);
 
     let arg = RGArg::switch("no-glob-case-insensitive")
         .hidden()
-        .overrides("glob-case-insensitive");
+        ._overrides("glob-case-insensitive");
     args.push(arg);
 }
 
@@ -1450,7 +1348,7 @@ This overrides the --no-heading flag.
     let arg = RGArg::switch("heading")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-heading");
+        ._overrides("no-heading");
     args.push(arg);
 
     const NO_SHORT: &str = "Don't group matches by each file.";
@@ -1466,7 +1364,7 @@ This overrides the --heading flag.
     let arg = RGArg::switch("no-heading")
         .help(NO_SHORT)
         .long_help(NO_LONG)
-        .overrides("heading");
+        ._overrides("heading");
     args.push(arg);
 }
 
@@ -1489,10 +1387,10 @@ This flag can be disabled with --no-hidden.
         .short(".")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-hidden");
+        ._overrides("no-hidden");
     args.push(arg);
 
-    let arg = RGArg::switch("no-hidden").hidden().overrides("hidden");
+    let arg = RGArg::switch("no-hidden").hidden()._overrides("hidden");
     args.push(arg);
 }
 
@@ -1615,7 +1513,7 @@ it. Globs are matched case insensitively.
         .help(SHORT)
         .long_help(LONG)
         .multiple()
-        .allow_leading_hyphen();
+        ._allow_leading_hyphen();
     args.push(arg);
 }
 
@@ -1634,8 +1532,8 @@ This flag overrides -s/--case-sensitive and -S/--smart-case.
         .short("i")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("case-sensitive")
-        .overrides("smart-case");
+        ._overrides("case-sensitive")
+        ._overrides("smart-case");
     args.push(arg);
 }
 
@@ -1658,7 +1556,7 @@ directly on the command line, then use -g instead.
         .help(SHORT)
         .long_help(LONG)
         .multiple()
-        .allow_leading_hyphen();
+        ._allow_leading_hyphen();
     args.push(arg);
 }
 
@@ -1676,12 +1574,12 @@ This flag can be disabled with the --no-ignore-file-case-insensitive flag.
     let arg = RGArg::switch("ignore-file-case-insensitive")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-ignore-file-case-insensitive");
+        ._overrides("no-ignore-file-case-insensitive");
     args.push(arg);
 
     let arg = RGArg::switch("no-ignore-file-case-insensitive")
         .hidden()
-        .overrides("ignore-file-case-insensitive");
+        ._overrides("ignore-file-case-insensitive");
     args.push(arg);
 }
 
@@ -1760,8 +1658,8 @@ The JSON Lines format can be disabled with --no-json.
     let arg = RGArg::switch("json")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-json")
-        .conflicts(&[
+        ._overrides("no-json")
+        ._conflicts(&[
             "count",
             "count-matches",
             "files",
@@ -1770,7 +1668,7 @@ The JSON Lines format can be disabled with --no-json.
         ]);
     args.push(arg);
 
-    let arg = RGArg::switch("no-json").hidden().overrides("json");
+    let arg = RGArg::switch("no-json").hidden()._overrides("json");
     args.push(arg);
 }
 
@@ -1795,16 +1693,16 @@ the --block-buffered flag.
     let arg = RGArg::switch("line-buffered")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-line-buffered")
-        .overrides("block-buffered")
-        .overrides("no-block-buffered");
+        ._overrides("no-line-buffered")
+        ._overrides("block-buffered")
+        ._overrides("no-block-buffered");
     args.push(arg);
 
     let arg = RGArg::switch("no-line-buffered")
         .hidden()
-        .overrides("line-buffered")
-        .overrides("block-buffered")
-        .overrides("no-block-buffered");
+        ._overrides("line-buffered")
+        ._overrides("block-buffered")
+        ._overrides("no-block-buffered");
     args.push(arg);
 }
 
@@ -1822,7 +1720,7 @@ This flag overrides --no-line-number.
         .short("n")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-line-number");
+        ._overrides("no-line-number");
     args.push(arg);
 
     const NO_SHORT: &str = "Suppress line numbers.";
@@ -1838,7 +1736,7 @@ This flag overrides --line-number.
         .short("N")
         .help(NO_SHORT)
         .long_help(NO_LONG)
-        .overrides("line-number");
+        ._overrides("line-number");
     args.push(arg);
 }
 
@@ -1857,7 +1755,7 @@ This overrides the --word-regexp flag.
         .short("x")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("word-regexp");
+        ._overrides("word-regexp");
     args.push(arg);
 }
 
@@ -1875,7 +1773,7 @@ When this flag is omitted or is set to 0, then it has no effect.
         .short("M")
         .help(SHORT)
         .long_help(LONG)
-        .number();
+        ._number();
     args.push(arg);
 }
 
@@ -1897,12 +1795,12 @@ This flag can be disabled with '--no-max-columns-preview'.
     let arg = RGArg::switch("max-columns-preview")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-max-columns-preview");
+        ._overrides("no-max-columns-preview");
     args.push(arg);
 
     let arg = RGArg::switch("no-max-columns-preview")
         .hidden()
-        .overrides("max-columns-preview");
+        ._overrides("max-columns-preview");
     args.push(arg);
 }
 
@@ -1917,7 +1815,7 @@ Limit the number of matching lines per file searched to NUM.
         .short("m")
         .help(SHORT)
         .long_help(LONG)
-        .number();
+        ._number();
     args.push(arg);
 }
 
@@ -1936,8 +1834,8 @@ descended into. 'rg --max-depth 1 dir/' will search only the direct children of
     let arg = RGArg::flag("max-depth", "NUM")
         .help(SHORT)
         .long_help(LONG)
-        .alias("maxdepth")
-        .number();
+        ._alias("maxdepth")
+        ._number();
     args.push(arg);
 }
 
@@ -1977,7 +1875,7 @@ This flag overrides --no-mmap.
 "
     );
     let arg =
-        RGArg::switch("mmap").help(SHORT).long_help(LONG).overrides("no-mmap");
+        RGArg::switch("mmap").help(SHORT).long_help(LONG)._overrides("no-mmap");
     args.push(arg);
 
     const NO_SHORT: &str = "Never use memory maps.";
@@ -1991,7 +1889,7 @@ This flag overrides --mmap.
     let arg = RGArg::switch("no-mmap")
         .help(NO_SHORT)
         .long_help(NO_LONG)
-        .overrides("mmap");
+        ._overrides("mmap");
     args.push(arg);
 }
 
@@ -2042,11 +1940,11 @@ This overrides the --stop-on-nonmatch flag.
         .short("U")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-multiline")
-        .overrides("stop-on-nonmatch");
+        ._overrides("no-multiline")
+        ._overrides("stop-on-nonmatch");
     args.push(arg);
 
-    let arg = RGArg::switch("no-multiline").hidden().overrides("multiline");
+    let arg = RGArg::switch("no-multiline").hidden()._overrides("multiline");
     args.push(arg);
 }
 
@@ -2075,12 +1973,12 @@ This flag can be disabled with --no-multiline-dotall.
     let arg = RGArg::switch("multiline-dotall")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-multiline-dotall");
+        ._overrides("no-multiline-dotall");
     args.push(arg);
 
     let arg = RGArg::switch("no-multiline-dotall")
         .hidden()
-        .overrides("multiline-dotall");
+        ._overrides("multiline-dotall");
     args.push(arg);
 }
 
@@ -2120,10 +2018,10 @@ This flag can be disabled with the --ignore flag.
     let arg = RGArg::switch("no-ignore")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("ignore");
+        ._overrides("ignore");
     args.push(arg);
 
-    let arg = RGArg::switch("ignore").hidden().overrides("no-ignore");
+    let arg = RGArg::switch("ignore").hidden()._overrides("no-ignore");
     args.push(arg);
 }
 
@@ -2142,10 +2040,10 @@ This flag can be disabled with the --ignore-dot flag.
     let arg = RGArg::switch("no-ignore-dot")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("ignore-dot");
+        ._overrides("ignore-dot");
     args.push(arg);
 
-    let arg = RGArg::switch("ignore-dot").hidden().overrides("no-ignore-dot");
+    let arg = RGArg::switch("ignore-dot").hidden()._overrides("no-ignore-dot");
     args.push(arg);
 }
 
@@ -2162,12 +2060,12 @@ This flag can be disabled with the --ignore-exclude flag.
     let arg = RGArg::switch("no-ignore-exclude")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("ignore-exclude");
+        ._overrides("ignore-exclude");
     args.push(arg);
 
     let arg = RGArg::switch("ignore-exclude")
         .hidden()
-        .overrides("no-ignore-exclude");
+        ._overrides("no-ignore-exclude");
     args.push(arg);
 }
 
@@ -2184,11 +2082,11 @@ This flag can be disabled with the --ignore-files flag.
     let arg = RGArg::switch("no-ignore-files")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("ignore-files");
+        ._overrides("ignore-files");
     args.push(arg);
 
     let arg =
-        RGArg::switch("ignore-files").hidden().overrides("no-ignore-files");
+        RGArg::switch("ignore-files").hidden()._overrides("no-ignore-files");
     args.push(arg);
 }
 
@@ -2206,11 +2104,11 @@ This flag can be disabled with the --ignore-global flag.
     let arg = RGArg::switch("no-ignore-global")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("ignore-global");
+        ._overrides("ignore-global");
     args.push(arg);
 
     let arg =
-        RGArg::switch("ignore-global").hidden().overrides("no-ignore-global");
+        RGArg::switch("ignore-global").hidden()._overrides("no-ignore-global");
     args.push(arg);
 }
 
@@ -2227,12 +2125,12 @@ This flag can be disabled with the --ignore-messages flag.
     let arg = RGArg::switch("no-ignore-messages")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("ignore-messages");
+        ._overrides("ignore-messages");
     args.push(arg);
 
     let arg = RGArg::switch("ignore-messages")
         .hidden()
-        .overrides("no-ignore-messages");
+        ._overrides("no-ignore-messages");
     args.push(arg);
 }
 
@@ -2248,11 +2146,11 @@ This flag can be disabled with the --ignore-parent flag.
     let arg = RGArg::switch("no-ignore-parent")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("ignore-parent");
+        ._overrides("ignore-parent");
     args.push(arg);
 
     let arg =
-        RGArg::switch("ignore-parent").hidden().overrides("no-ignore-parent");
+        RGArg::switch("ignore-parent").hidden()._overrides("no-ignore-parent");
     args.push(arg);
 }
 
@@ -2270,10 +2168,10 @@ This flag can be disabled with the --ignore-vcs flag.
     let arg = RGArg::switch("no-ignore-vcs")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("ignore-vcs");
+        ._overrides("ignore-vcs");
     args.push(arg);
 
-    let arg = RGArg::switch("ignore-vcs").hidden().overrides("no-ignore-vcs");
+    let arg = RGArg::switch("ignore-vcs").hidden()._overrides("no-ignore-vcs");
     args.push(arg);
 }
 
@@ -2290,10 +2188,10 @@ This flag can be disabled with the --messages flag.
     let arg = RGArg::switch("no-messages")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("messages");
+        ._overrides("messages");
     args.push(arg);
 
-    let arg = RGArg::switch("messages").hidden().overrides("no-messages");
+    let arg = RGArg::switch("messages").hidden()._overrides("no-messages");
     args.push(arg);
 }
 
@@ -2310,14 +2208,14 @@ for --unicode.
     let arg = RGArg::switch("no-pcre2-unicode")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("pcre2-unicode")
-        .overrides("unicode");
+        ._overrides("pcre2-unicode")
+        ._overrides("unicode");
     args.push(arg);
 
     let arg = RGArg::switch("pcre2-unicode")
         .hidden()
-        .overrides("no-pcre2-unicode")
-        .overrides("no-unicode");
+        ._overrides("no-pcre2-unicode")
+        ._overrides("no-unicode");
     args.push(arg);
 }
 
@@ -2337,11 +2235,11 @@ This flag can be disabled with --require-git.
     let arg = RGArg::switch("no-require-git")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("require-git");
+        ._overrides("require-git");
     args.push(arg);
 
     let arg =
-        RGArg::switch("require-git").hidden().overrides("no-require-git");
+        RGArg::switch("require-git").hidden()._overrides("no-require-git");
     args.push(arg);
 }
 
@@ -2386,14 +2284,14 @@ The --no-unicode flag can be disabled with --unicode. Note that
     let arg = RGArg::switch("no-unicode")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("unicode")
-        .overrides("pcre2-unicode");
+        ._overrides("unicode")
+        ._overrides("pcre2-unicode");
     args.push(arg);
 
     let arg = RGArg::switch("unicode")
         .hidden()
-        .overrides("no-unicode")
-        .overrides("no-pcre2-unicode");
+        ._overrides("no-unicode")
+        ._overrides("no-pcre2-unicode");
     args.push(arg);
 }
 
@@ -2433,7 +2331,7 @@ Using this flag implies -a/--text.
     let arg = RGArg::switch("null-data")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("crlf");
+        ._overrides("crlf");
     args.push(arg);
 }
 
@@ -2458,12 +2356,12 @@ This flag can be disabled with --no-one-file-system.
     let arg = RGArg::switch("one-file-system")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-one-file-system");
+        ._overrides("no-one-file-system");
     args.push(arg);
 
     let arg = RGArg::switch("no-one-file-system")
         .hidden()
-        .overrides("one-file-system");
+        ._overrides("one-file-system");
     args.push(arg);
 }
 
@@ -2513,10 +2411,10 @@ This overrides the --context, --after-context and --before-context flags.
     let arg = RGArg::switch("passthru")
         .help(SHORT)
         .long_help(LONG)
-        .alias("passthrough")
-        .overrides("after-context")
-        .overrides("before-context")
-        .overrides("context");
+        ._alias("passthrough")
+        ._overrides("after-context")
+        ._overrides("before-context")
+        ._overrides("context");
     args.push(arg);
 }
 
@@ -2548,18 +2446,18 @@ This flag can be disabled with --no-pcre2.
         .short("P")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-pcre2")
-        .overrides("auto-hybrid-regex")
-        .overrides("no-auto-hybrid-regex")
-        .overrides("engine");
+        ._overrides("no-pcre2")
+        ._overrides("auto-hybrid-regex")
+        ._overrides("no-auto-hybrid-regex")
+        ._overrides("engine");
     args.push(arg);
 
     let arg = RGArg::switch("no-pcre2")
         .hidden()
-        .overrides("pcre2")
-        .overrides("auto-hybrid-regex")
-        .overrides("no-auto-hybrid-regex")
-        .overrides("engine");
+        ._overrides("pcre2")
+        ._overrides("auto-hybrid-regex")
+        ._overrides("no-auto-hybrid-regex")
+        ._overrides("engine");
     args.push(arg);
 }
 
@@ -2628,11 +2526,11 @@ This overrides the -z/--search-zip flag.
     let arg = RGArg::flag("pre", "COMMAND")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-pre")
-        .overrides("search-zip");
+        ._overrides("no-pre")
+        ._overrides("search-zip");
     args.push(arg);
 
-    let arg = RGArg::switch("no-pre").hidden().overrides("pre");
+    let arg = RGArg::switch("no-pre").hidden()._overrides("pre");
     args.push(arg);
 }
 
@@ -2668,7 +2566,7 @@ This flag has no effect if the --pre flag is not used.
         .help(SHORT)
         .long_help(LONG)
         .multiple()
-        .allow_leading_hyphen();
+        ._allow_leading_hyphen();
     args.push(arg);
 }
 
@@ -2741,7 +2639,7 @@ will be provided. Namely, the following is equivalent to the above:
         .help(SHORT)
         .long_help(LONG)
         .multiple()
-        .allow_leading_hyphen();
+        ._allow_leading_hyphen();
     args.push(arg);
 }
 
@@ -2784,7 +2682,7 @@ This flag can be used with the -o/--only-matching flag.
         .short("r")
         .help(SHORT)
         .long_help(LONG)
-        .allow_leading_hyphen();
+        ._allow_leading_hyphen();
     args.push(arg);
 }
 
@@ -2803,11 +2701,11 @@ This flag can be disabled with --no-search-zip.
         .short("z")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-search-zip")
-        .overrides("pre");
+        ._overrides("no-search-zip")
+        ._overrides("pre");
     args.push(arg);
 
-    let arg = RGArg::switch("no-search-zip").hidden().overrides("search-zip");
+    let arg = RGArg::switch("no-search-zip").hidden()._overrides("search-zip");
     args.push(arg);
 }
 
@@ -2834,8 +2732,8 @@ This overrides the -s/--case-sensitive and -i/--ignore-case flags.
         .short("S")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("case-sensitive")
-        .overrides("ignore-case");
+        ._overrides("case-sensitive")
+        ._overrides("ignore-case");
     args.push(arg);
 }
 
@@ -2855,16 +2753,16 @@ This flag can be disabled with --no-sort-files.
         .help(SHORT)
         .long_help(LONG)
         .hidden()
-        .overrides("no-sort-files")
-        .overrides("sort")
-        .overrides("sortr");
+        ._overrides("no-sort-files")
+        ._overrides("sort")
+        ._overrides("sortr");
     args.push(arg);
 
     let arg = RGArg::switch("no-sort-files")
         .hidden()
-        .overrides("sort-files")
-        .overrides("sort")
-        .overrides("sortr");
+        ._overrides("sort-files")
+        ._overrides("sort")
+        ._overrides("sortr");
     args.push(arg);
 }
 
@@ -2897,9 +2795,9 @@ parallelism and run in a single thread.
         .help(SHORT)
         .long_help(LONG)
         .possible_values(&["path", "modified", "accessed", "created", "none"])
-        .overrides("sortr")
-        .overrides("sort-files")
-        .overrides("no-sort-files");
+        ._overrides("sortr")
+        ._overrides("sort-files")
+        ._overrides("no-sort-files");
     args.push(arg);
 }
 
@@ -2932,9 +2830,9 @@ parallelism and run in a single thread.
         .help(SHORT)
         .long_help(LONG)
         .possible_values(&["path", "modified", "accessed", "created", "none"])
-        .overrides("sort")
-        .overrides("sort-files")
-        .overrides("no-sort-files");
+        ._overrides("sort")
+        ._overrides("sort-files")
+        ._overrides("no-sort-files");
     args.push(arg);
 }
 
@@ -2958,10 +2856,10 @@ This flag can be disabled with --no-stats.
     let arg = RGArg::switch("stats")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-stats");
+        ._overrides("no-stats");
     args.push(arg);
 
-    let arg = RGArg::switch("no-stats").hidden().overrides("stats");
+    let arg = RGArg::switch("no-stats").hidden()._overrides("stats");
     args.push(arg);
 }
 
@@ -2980,7 +2878,7 @@ This overrides the -U/--multiline flag.
     let arg = RGArg::switch("stop-on-nonmatch")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("multiline");
+        ._overrides("multiline");
     args.push(arg);
 }
 
@@ -3006,16 +2904,16 @@ This flag can be disabled with '--no-text'. It overrides the '--binary' flag.
         .short("a")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-text")
-        .overrides("binary")
-        .overrides("no-binary");
+        ._overrides("no-text")
+        ._overrides("binary")
+        ._overrides("no-binary");
     args.push(arg);
 
     let arg = RGArg::switch("no-text")
         .hidden()
-        .overrides("text")
-        .overrides("binary")
-        .overrides("no-binary");
+        ._overrides("text")
+        ._overrides("binary")
+        ._overrides("no-binary");
     args.push(arg);
 }
 
@@ -3043,10 +2941,10 @@ This flag can be disabled with --no-trim.
 "
     );
     let arg =
-        RGArg::switch("trim").help(SHORT).long_help(LONG).overrides("no-trim");
+        RGArg::switch("trim").help(SHORT).long_help(LONG)._overrides("no-trim");
     args.push(arg);
 
-    let arg = RGArg::switch("no-trim").hidden().overrides("trim");
+    let arg = RGArg::switch("no-trim").hidden()._overrides("trim");
     args.push(arg);
 }
 
@@ -3157,7 +3055,7 @@ Show all supported file types and their corresponding globs.
         .long_help(LONG)
         // This also technically conflicts with PATTERN, but the first file
         // path will actually be in PATTERN.
-        .conflicts(&["file", "files", "pattern", "regexp"]);
+        ._conflicts(&["file", "files", "pattern", "regexp"]);
     args.push(arg);
 }
 
@@ -3210,7 +3108,7 @@ This flag overrides --no-filename.
         .short("H")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("no-filename");
+        ._overrides("no-filename");
     args.push(arg);
 
     const NO_SHORT: &str = "Never print the file path with the matched lines.";
@@ -3226,7 +3124,7 @@ This flag overrides --with-filename.
         .short("I")
         .help(NO_SHORT)
         .long_help(NO_LONG)
-        .overrides("with-filename");
+        ._overrides("with-filename");
     args.push(arg);
 }
 
@@ -3244,6 +3142,101 @@ This overrides the --line-regexp flag.
         .short("w")
         .help(SHORT)
         .long_help(LONG)
-        .overrides("line-regexp");
+        ._overrides("line-regexp");
     args.push(arg);
+}
+
+pub fn help_short() -> String {
+    let mut out = String::new();
+    writeln!(out, "ripgrep {}", version()).unwrap();
+    writeln!(out).unwrap();
+    writeln!(out, "{}", ABOUT.trim()).unwrap();
+    writeln!(out).unwrap();
+    writeln!(out, "{}", USAGE).unwrap();
+    writeln!(out).unwrap();
+    writeln!(out, "ARGS:").unwrap();
+    for arg in all_args_and_flags() {
+        if let RGArgKind::Positional { value_name, .. } = arg.kind {
+            if arg.hidden {
+                continue;
+            }
+            writeln!(out, "    <{}>  {}", value_name, arg.doc_short).unwrap();
+        }
+    }
+    writeln!(out).unwrap();
+    writeln!(out, "OPTIONS:").unwrap();
+    for arg in all_args_and_flags() {
+        if arg.hidden {
+            continue;
+        }
+        match arg.kind {
+            RGArgKind::Positional { .. } => continue,
+            RGArgKind::Switch { long, short, .. } => {
+                if let Some(s) = short {
+                    writeln!(out, "    -{}, --{:30} {}", s, long, arg.doc_short).unwrap();
+                } else {
+                    writeln!(out, "    --{:33} {}", long, arg.doc_short).unwrap();
+                }
+            }
+            RGArgKind::Flag { long, short, value_name, .. } => {
+                if let Some(s) = short {
+                    writeln!(out, "    -{}, --{}=<{}>{:width$} {}", s, long, value_name, arg.doc_short, width = 24 - long.len() - value_name.len()).unwrap();
+                } else {
+                    writeln!(out, "    --{}=<{}>{:width$} {}", long, value_name, arg.doc_short, width = 27 - long.len() - value_name.len()).unwrap();
+                }
+            }
+        }
+    }
+    out
+}
+
+pub fn help_long() -> String {
+    let mut out = String::new();
+    writeln!(out, "ripgrep {}", long_version(None, true)).unwrap();
+    writeln!(out).unwrap();
+    writeln!(out, "{}", ABOUT.trim()).unwrap();
+    writeln!(out).unwrap();
+    writeln!(out, "{}", USAGE).unwrap();
+    writeln!(out).unwrap();
+    writeln!(out, "ARGS:").unwrap();
+    for arg in all_args_and_flags() {
+        if let RGArgKind::Positional { value_name, .. } = arg.kind {
+            if arg.hidden {
+                continue;
+            }
+            writeln!(out, "    <{}>", value_name).unwrap();
+            for line in arg.doc_long.trim().lines() {
+                writeln!(out, "        {}", line).unwrap();
+            }
+            writeln!(out).unwrap();
+        }
+    }
+    writeln!(out, "OPTIONS:").unwrap();
+    for arg in all_args_and_flags() {
+        if arg.hidden {
+            continue;
+        }
+        match arg.kind {
+            RGArgKind::Positional { .. } => continue,
+            RGArgKind::Switch { long, short, .. } => {
+                if let Some(s) = short {
+                    writeln!(out, "    -{}, --{}", s, long).unwrap();
+                } else {
+                    writeln!(out, "    --{}", long).unwrap();
+                }
+            }
+            RGArgKind::Flag { long, short, value_name, .. } => {
+                if let Some(s) = short {
+                    writeln!(out, "    -{}, --{}=<{}>", s, long, value_name).unwrap();
+                } else {
+                    writeln!(out, "    --{}=<{}>", long, value_name).unwrap();
+                }
+            }
+        }
+        for line in arg.doc_long.trim().lines() {
+            writeln!(out, "        {}", line).unwrap();
+        }
+        writeln!(out).unwrap();
+    }
+    out
 }

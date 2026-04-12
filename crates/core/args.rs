@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     env,
     ffi::{OsStr, OsString},
     io::{self, IsTerminal, Write},
@@ -8,7 +8,6 @@ use std::{
 };
 
 use {
-    clap,
     grep::{
         cli,
         matcher::LineTerminator,
@@ -31,6 +30,7 @@ use {
         types::{FileTypeDef, Types, TypesBuilder},
         {Walk, WalkBuilder, WalkParallel},
     },
+    lexopt::Parser,
     termcolor::{BufferWriter, ColorChoice, WriteColor},
 };
 
@@ -135,7 +135,7 @@ impl Args {
         // trying to parse config files. If a config file exists and has
         // arguments, then we re-parse argv, otherwise we just use the matches
         // we have here.
-        let early_matches = ArgMatches::new(clap_matches(env::args_os())?);
+        let early_matches = ArgMatches::parse_args(env::args_os())?;
         set_messages(!early_matches.is_present("no-messages"));
         set_ignore_messages(!early_matches.is_present("no-ignore-messages"));
 
@@ -379,10 +379,47 @@ impl Args {
     }
 }
 
-/// `ArgMatches` wraps `clap::ArgMatches` and provides semantic meaning to
-/// the parsed arguments.
 #[derive(Clone, Debug)]
-struct ArgMatches(clap::ArgMatches<'static>);
+struct ArgMatches {
+    switches: HashMap<String, u64>,
+    flags: HashMap<String, Vec<OsString>>,
+    positionals: Vec<OsString>,
+}
+
+impl ArgMatches {
+    fn is_present(&self, name: &str) -> bool {
+        self.switches.contains_key(name) || self.flags.contains_key(name)
+    }
+
+    fn occurrences_of(&self, name: &str) -> u64 {
+        self.switches.get(name).copied().unwrap_or(0)
+    }
+
+    fn value_of_lossy(&self, name: &str) -> Option<String> {
+        self.flags
+            .get(name)
+            .and_then(|vals| vals.last())
+            .and_then(|v| v.to_str().map(|s| s.to_string()))
+    }
+
+    fn values_of_lossy(&self, name: &str) -> Option<Vec<String>> {
+        self.flags.get(name).map(|vals| {
+            vals.iter()
+                .filter_map(|v| v.to_str().map(|s| s.to_string()))
+                .collect()
+        })
+    }
+
+    fn value_of_os(&self, name: &str) -> Option<&OsStr> {
+        self.flags.get(name).and_then(|vals| vals.last().map(|v| v.as_os_str()))
+    }
+
+    fn values_of_os(&self, name: &str) -> Option<Vec<&OsStr>> {
+        self.flags.get(name).map(|vals| {
+            vals.iter().map(|v| v.as_os_str()).collect()
+        })
+    }
+}
 
 /// The output format. Generally, this corresponds to the printer that ripgrep
 /// uses to show search results.
@@ -497,28 +534,79 @@ enum EncodingMode {
 }
 
 impl ArgMatches {
-    /// Create an ArgMatches from clap's parse result.
-    fn new(clap_matches: clap::ArgMatches<'static>) -> ArgMatches {
-        ArgMatches(clap_matches)
+    fn parse_args<I, T>(args: I) -> Result<ArgMatches>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        let mut switches: HashMap<String, u64> = HashMap::new();
+        let mut flags: HashMap<String, Vec<OsString>> = HashMap::new();
+        let mut positionals: Vec<OsString> = vec![];
+
+        let mut parser = Parser::from_args(args);
+        while let Some(arg) = parser.next()? {
+            match arg {
+                lexopt::Arg::Short('h') => {
+                    print!("{}", app::help_short());
+                    std::process::exit(0);
+                }
+                lexopt::Arg::Long("help") => {
+                    print!("{}", app::help_long());
+                    std::process::exit(0);
+                }
+                lexopt::Arg::Short('V') | lexopt::Arg::Long("version") => {
+                    writeln!(io::stdout(), "ripgrep {}", app::long_version(None, true)).unwrap();
+                    std::process::exit(0);
+                }
+                lexopt::Arg::Short(c) => {
+                    if let Some((name, is_flag)) = short_to_name(c) {
+                        if is_flag {
+                            let val = parser.value()?;
+                            flags.entry(name.to_string()).or_default().push(val);
+                        } else {
+                            *switches.entry(name.to_string()).or_insert(0) += 1;
+                        }
+                    } else {
+                        return Err(format!("unknown option -{}", c).into());
+                    }
+                }
+                lexopt::Arg::Long(name) => {
+                    if let Some((n, is_flag)) = long_to_name(&name) {
+                        if is_flag {
+                            let val = parser.value()?;
+                            flags.entry(n.to_string()).or_default().push(val);
+                        } else {
+                            *switches.entry(n.to_string()).or_insert(0) += 1;
+                        }
+                    } else {
+                        return Err(format!("unknown option --{}", name).into());
+                    }
+                }
+                lexopt::Arg::Value(val) => {
+                    positionals.push(val);
+                }
+            }
+        }
+
+        if !positionals.is_empty() {
+            flags.entry("pattern".to_string()).or_default().push(positionals[0].clone());
+        }
+        if positionals.len() > 1 {
+            for p in &positionals[1..] {
+                flags.entry("path".to_string()).or_default().push(p.clone());
+            }
+        }
+
+        Ok(ArgMatches { switches, flags, positionals })
     }
 
-    /// Run clap and return the matches using a config file if present. If clap
-    /// determines a problem with the user provided arguments (or if --help or
-    /// --version are given), then an error/usage/version will be printed and
-    /// the process will exit.
-    ///
-    /// If there are no additional arguments from the environment (e.g., a
-    /// config file), then the given matches are returned as is.
     fn reconfigure(self) -> Result<ArgMatches> {
-        // If the end user says no config, then respect it.
         if self.is_present("no-config") {
             log::debug!(
                 "not reading config files because --no-config is present"
             );
             return Ok(self);
         }
-        // If the user wants ripgrep to use a config file, then parse args
-        // from that first.
         let mut args = config::args();
         if args.is_empty() {
             return Ok(self);
@@ -529,7 +617,7 @@ impl ArgMatches {
         }
         args.extend(cliargs);
         log::debug!("final argv: {:?}", args);
-        Ok(ArgMatches(clap_matches(args)?))
+        ArgMatches::parse_args(args)
     }
 
     /// Convert the result of parsing CLI arguments into ripgrep's higher level
@@ -1654,7 +1742,7 @@ impl ArgMatches {
     }
 }
 
-/// Lower level generic helper methods for teasing values out of clap.
+/// Lower level generic helper methods for teasing values out of ArgMatches.
 impl ArgMatches {
     /// Like values_of_lossy, but returns an empty vec if the flag is not
     /// present.
@@ -1697,36 +1785,6 @@ impl ArgMatches {
             Some(size) => size,
         };
         Ok(Some(cli::parse_human_readable_size(&size)?))
-    }
-}
-
-/// The following methods mostly dispatch to the underlying clap methods
-/// directly. Methods that would otherwise get a single value will fetch all
-/// values and return the last one. (Clap returns the first one.) We only
-/// define the ones we need.
-impl ArgMatches {
-    fn is_present(&self, name: &str) -> bool {
-        self.0.is_present(name)
-    }
-
-    fn occurrences_of(&self, name: &str) -> u64 {
-        self.0.occurrences_of(name)
-    }
-
-    fn value_of_lossy(&self, name: &str) -> Option<String> {
-        self.0.value_of_lossy(name).map(|s| s.into_owned())
-    }
-
-    fn values_of_lossy(&self, name: &str) -> Option<Vec<String>> {
-        self.0.values_of_lossy(name)
-    }
-
-    fn value_of_os(&self, name: &str) -> Option<&OsStr> {
-        self.0.value_of_os(name)
-    }
-
-    fn values_of_os(&self, name: &str) -> Option<clap::OsValues<'_>> {
-        self.0.values_of_os(name)
     }
 }
 
@@ -1810,34 +1868,6 @@ fn sort_by_option<T: Ord>(
         (Some(p1), Some(p2), false) => p1.cmp(&p2),
         _ => std::cmp::Ordering::Equal,
     }
-}
-
-/// Returns a clap matches object if the given arguments parse successfully.
-///
-/// Otherwise, if an error occurred, then it is returned unless the error
-/// corresponds to a `--help` or `--version` request. In which case, the
-/// corresponding output is printed and the current process is exited
-/// successfully.
-fn clap_matches<I, T>(args: I) -> Result<clap::ArgMatches<'static>>
-where
-    I: IntoIterator<Item = T>,
-    T: Into<OsString> + Clone,
-{
-    let err = match app::app().get_matches_from_safe(args) {
-        Ok(matches) => return Ok(matches),
-        Err(err) => err,
-    };
-    if err.use_stderr() {
-        return Err(err.into());
-    }
-    // Explicitly ignore any error returned by write!. The most likely error
-    // at this point is a broken pipe error, in which case, we want to ignore
-    // it and exit quietly.
-    //
-    // (This is the point of this helper function. clap's functionality for
-    // doing this will panic on a broken pipe error.)
-    let _ = write!(io::stdout(), "{}", err);
-    std::process::exit(0);
 }
 
 /// Attempts to discover the current working directory. This mostly just defers
@@ -1976,4 +2006,199 @@ where
     subjects
         .map(|s| (s.path().metadata().and_then(|m| get_time(&m)).ok(), s))
         .collect()
+}
+
+fn short_to_name(c: char) -> Option<(&'static str, bool)> {
+    match c {
+        'A' => Some(("after-context", true)),
+        'B' => Some(("before-context", true)),
+        'C' => Some(("context", true)),
+        'E' => Some(("encoding", true)),
+        'F' => Some(("fixed-strings", false)),
+        'H' => Some(("with-filename", false)),
+        'I' => Some(("no-filename", false)),
+        'L' => Some(("follow", false)),
+        'M' => Some(("max-columns", true)),
+        'N' => Some(("no-line-number", false)),
+        'P' => Some(("pcre2", false)),
+        'S' => Some(("smart-case", false)),
+        'U' => Some(("multiline", false)),
+        'V' => Some(("version", false)),
+        'a' => Some(("text", false)),
+        'b' => Some(("byte-offset", false)),
+        'c' => Some(("count", false)),
+        'e' => Some(("regexp", true)),
+        'f' => Some(("file", true)),
+        'g' => Some(("glob", true)),
+        'i' => Some(("ignore-case", false)),
+        'j' => Some(("threads", true)),
+        'l' => Some(("files-with-matches", false)),
+        'm' => Some(("max-count", true)),
+        'n' => Some(("line-number", false)),
+        'o' => Some(("only-matching", false)),
+        'p' => Some(("pretty", false)),
+        'q' => Some(("quiet", false)),
+        'r' => Some(("replace", true)),
+        's' => Some(("case-sensitive", false)),
+        't' => Some(("type", true)),
+        'T' => Some(("type-not", true)),
+        'u' => Some(("unrestricted", false)),
+        'v' => Some(("invert-match", false)),
+        'w' => Some(("word-regexp", false)),
+        'x' => Some(("line-regexp", false)),
+        'z' => Some(("search-zip", false)),
+        '0' => Some(("null", false)),
+        '.' => Some(("hidden", false)),
+        _ => None,
+    }
+}
+
+fn long_to_name(name: &str) -> Option<(&'static str, bool)> {
+    match name {
+        "after-context" => Some(("after-context", true)),
+        "auto-hybrid-regex" => Some(("auto-hybrid-regex", false)),
+        "no-auto-hybrid-regex" => Some(("no-auto-hybrid-regex", false)),
+        "before-context" => Some(("before-context", true)),
+        "binary" => Some(("binary", false)),
+        "no-binary" => Some(("no-binary", false)),
+        "block-buffered" => Some(("block-buffered", false)),
+        "no-block-buffered" => Some(("no-block-buffered", false)),
+        "byte-offset" => Some(("byte-offset", false)),
+        "case-sensitive" => Some(("case-sensitive", false)),
+        "color" => Some(("color", true)),
+        "colors" => Some(("colors", true)),
+        "column" => Some(("column", false)),
+        "no-column" => Some(("no-column", false)),
+        "context" => Some(("context", true)),
+        "context-separator" => Some(("context-separator", true)),
+        "no-context-separator" => Some(("no-context-separator", false)),
+        "count" => Some(("count", false)),
+        "count-matches" => Some(("count-matches", false)),
+        "crlf" => Some(("crlf", false)),
+        "no-crlf" => Some(("no-crlf", false)),
+        "debug" => Some(("debug", false)),
+        "trace" => Some(("trace", false)),
+        "dfa-size-limit" => Some(("dfa-size-limit", true)),
+        "encoding" => Some(("encoding", true)),
+        "no-encoding" => Some(("no-encoding", false)),
+        "engine" => Some(("engine", true)),
+        "field-context-separator" => Some(("field-context-separator", true)),
+        "field-match-separator" => Some(("field-match-separator", true)),
+        "file" => Some(("file", true)),
+        "files" => Some(("files", false)),
+        "files-with-matches" => Some(("files-with-matches", false)),
+        "files-without-match" => Some(("files-without-match", false)),
+        "fixed-strings" => Some(("fixed-strings", false)),
+        "no-fixed-strings" => Some(("no-fixed-strings", false)),
+        "follow" => Some(("follow", false)),
+        "no-follow" => Some(("no-follow", false)),
+        "glob" => Some(("glob", true)),
+        "glob-case-insensitive" => Some(("glob-case-insensitive", false)),
+        "no-glob-case-insensitive" => Some(("no-glob-case-insensitive", false)),
+        "heading" => Some(("heading", false)),
+        "no-heading" => Some(("no-heading", false)),
+        "hidden" => Some(("hidden", false)),
+        "no-hidden" => Some(("no-hidden", false)),
+        "hostname-bin" => Some(("hostname-bin", true)),
+        "hyperlink-format" => Some(("hyperlink-format", true)),
+        "iglob" => Some(("iglob", true)),
+        "ignore-case" => Some(("ignore-case", false)),
+        "ignore-file" => Some(("ignore-file", true)),
+        "ignore-file-case-insensitive" => Some(("ignore-file-case-insensitive", false)),
+        "no-ignore-file-case-insensitive" => Some(("no-ignore-file-case-insensitive", false)),
+        "include-zero" => Some(("include-zero", false)),
+        "invert-match" => Some(("invert-match", false)),
+        "json" => Some(("json", false)),
+        "no-json" => Some(("no-json", false)),
+        "line-buffered" => Some(("line-buffered", false)),
+        "no-line-buffered" => Some(("no-line-buffered", false)),
+        "line-number" => Some(("line-number", false)),
+        "no-line-number" => Some(("no-line-number", false)),
+        "line-regexp" => Some(("line-regexp", false)),
+        "max-columns" => Some(("max-columns", true)),
+        "max-columns-preview" => Some(("max-columns-preview", false)),
+        "no-max-columns-preview" => Some(("no-max-columns-preview", false)),
+        "max-count" => Some(("max-count", true)),
+        "max-depth" => Some(("max-depth", true)),
+        "maxdepth" => Some(("max-depth", true)),
+        "max-filesize" => Some(("max-filesize", true)),
+        "mmap" => Some(("mmap", false)),
+        "no-mmap" => Some(("no-mmap", false)),
+        "multiline" => Some(("multiline", false)),
+        "no-multiline" => Some(("no-multiline", false)),
+        "multiline-dotall" => Some(("multiline-dotall", false)),
+        "no-multiline-dotall" => Some(("no-multiline-dotall", false)),
+        "no-config" => Some(("no-config", false)),
+        "no-ignore" => Some(("no-ignore", false)),
+        "ignore" => Some(("ignore", false)),
+        "no-ignore-dot" => Some(("no-ignore-dot", false)),
+        "ignore-dot" => Some(("ignore-dot", false)),
+        "no-ignore-exclude" => Some(("no-ignore-exclude", false)),
+        "ignore-exclude" => Some(("ignore-exclude", false)),
+        "no-ignore-files" => Some(("no-ignore-files", false)),
+        "ignore-files" => Some(("ignore-files", false)),
+        "no-ignore-global" => Some(("no-ignore-global", false)),
+        "ignore-global" => Some(("ignore-global", false)),
+        "no-ignore-messages" => Some(("no-ignore-messages", false)),
+        "ignore-messages" => Some(("ignore-messages", false)),
+        "no-ignore-parent" => Some(("no-ignore-parent", false)),
+        "ignore-parent" => Some(("ignore-parent", false)),
+        "no-ignore-vcs" => Some(("no-ignore-vcs", false)),
+        "ignore-vcs" => Some(("ignore-vcs", false)),
+        "no-messages" => Some(("no-messages", false)),
+        "messages" => Some(("messages", false)),
+        "no-pcre2-unicode" => Some(("no-pcre2-unicode", false)),
+        "pcre2-unicode" => Some(("pcre2-unicode", false)),
+        "no-require-git" => Some(("no-require-git", false)),
+        "require-git" => Some(("require-git", false)),
+        "no-unicode" => Some(("no-unicode", false)),
+        "unicode" => Some(("unicode", false)),
+        "null" => Some(("null", false)),
+        "null-data" => Some(("null-data", false)),
+        "one-file-system" => Some(("one-file-system", false)),
+        "no-one-file-system" => Some(("no-one-file-system", false)),
+        "only-matching" => Some(("only-matching", false)),
+        "path-separator" => Some(("path-separator", true)),
+        "passthru" => Some(("passthru", false)),
+        "passthrough" => Some(("passthru", false)),
+        "pcre2" => Some(("pcre2", false)),
+        "no-pcre2" => Some(("no-pcre2", false)),
+        "pcre2-version" => Some(("pcre2-version", false)),
+        "pre" => Some(("pre", true)),
+        "no-pre" => Some(("no-pre", false)),
+        "pre-glob" => Some(("pre-glob", true)),
+        "pretty" => Some(("pretty", false)),
+        "quiet" => Some(("quiet", false)),
+        "regex-size-limit" => Some(("regex-size-limit", true)),
+        "regexp" => Some(("regexp", true)),
+        "replace" => Some(("replace", true)),
+        "search-zip" => Some(("search-zip", false)),
+        "no-search-zip" => Some(("no-search-zip", false)),
+        "smart-case" => Some(("smart-case", false)),
+        "sort-files" => Some(("sort-files", false)),
+        "no-sort-files" => Some(("no-sort-files", false)),
+        "sort" => Some(("sort", true)),
+        "sortr" => Some(("sortr", true)),
+        "stats" => Some(("stats", false)),
+        "no-stats" => Some(("no-stats", false)),
+        "stop-on-nonmatch" => Some(("stop-on-nonmatch", false)),
+        "text" => Some(("text", false)),
+        "no-text" => Some(("no-text", false)),
+        "threads" => Some(("threads", true)),
+        "trim" => Some(("trim", false)),
+        "no-trim" => Some(("no-trim", false)),
+        "type" => Some(("type", true)),
+        "type-add" => Some(("type-add", true)),
+        "type-clear" => Some(("type-clear", true)),
+        "type-list" => Some(("type-list", false)),
+        "type-not" => Some(("type-not", true)),
+        "unrestricted" => Some(("unrestricted", false)),
+        "vimgrep" => Some(("vimgrep", false)),
+        "with-filename" => Some(("with-filename", false)),
+        "no-filename" => Some(("no-filename", false)),
+        "word-regexp" => Some(("word-regexp", false)),
+        "help" => None,
+        "version" => None,
+        _ => None,
+    }
 }

@@ -425,8 +425,21 @@ class LogScale(ScaleBase):
             minpos = 1e-300  # This value should rarely if ever
                              # end up with a visible effect.
 
-        return (minpos if vmin <= 0 else vmin,
-                minpos if vmax <= 0 else vmax)
+        # 处理反转坐标轴的情况（vmin > vmax）
+        # 先找到实际的最小值和最大值，处理后再按原顺序返回
+        if vmin > vmax:
+            # 反转的情况
+            real_min = vmax
+            real_max = vmin
+            # 处理
+            new_real_min = minpos if real_min <= 0 else real_min
+            new_real_max = minpos if real_max <= 0 else real_max
+            # 按原顺序返回
+            return (new_real_max, new_real_min)
+        else:
+            # 正常情况
+            return (minpos if vmin <= 0 else vmin,
+                    minpos if vmax <= 0 else vmax)
 
 
 class FuncScaleLog(LogScale):
@@ -700,8 +713,22 @@ class LogitScale(ScaleBase):
         if not np.isfinite(minpos):
             minpos = 1e-7    # This value should rarely if ever
                              # end up with a visible effect.
-        return (minpos if vmin <= 0 else vmin,
-                1 - minpos if vmax >= 1 else vmax)
+        
+        # 处理反转坐标轴的情况（vmin > vmax）
+        # 先找到实际的最小值和最大值，处理后再按原顺序返回
+        if vmin > vmax:
+            # 反转的情况
+            real_min = vmax
+            real_max = vmin
+            # 处理
+            new_real_min = minpos if real_min <= 0 else real_min
+            new_real_max = 1 - minpos if real_max >= 1 else real_max
+            # 按原顺序返回
+            return (new_real_max, new_real_min)
+        else:
+            # 正常情况
+            return (minpos if vmin <= 0 else vmin,
+                    1 - minpos if vmax >= 1 else vmax)
 
 
 _scale_mapping = {

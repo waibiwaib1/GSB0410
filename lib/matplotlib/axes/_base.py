@@ -3248,17 +3248,16 @@ class _AxesBase(martist.Artist):
             right = old_right
 
         if self.get_xscale() == 'log':
-            if left <= 0:
+            # 处理反转坐标轴的情况（left > right）
+            real_min = min(left, right)
+            real_max = max(left, right)
+            if real_min <= 0:
                 cbook._warn_external(
-                    'Attempted to set non-positive left xlim on a '
+                    'Attempted to set non-positive xlim on a '
                     'log-scaled axis.\n'
                     'Invalid limit will be ignored.')
+                # 如果有一个无效，我们需要恢复原来的 limits
                 left = old_left
-            if right <= 0:
-                cbook._warn_external(
-                    'Attempted to set non-positive right xlim on a '
-                    'log-scaled axis.\n'
-                    'Invalid limit will be ignored.')
                 right = old_right
         if left == right:
             cbook._warn_external(
@@ -3627,17 +3626,16 @@ class _AxesBase(martist.Artist):
             top = old_top
 
         if self.get_yscale() == 'log':
-            if bottom <= 0:
+            # 处理反转坐标轴的情况（bottom > top）
+            real_min = min(bottom, top)
+            real_max = max(bottom, top)
+            if real_min <= 0:
                 cbook._warn_external(
-                    'Attempted to set non-positive bottom ylim on a '
+                    'Attempted to set non-positive ylim on a '
                     'log-scaled axis.\n'
                     'Invalid limit will be ignored.')
+                # 如果有一个无效，我们需要恢复原来的 limits
                 bottom = old_bottom
-            if top <= 0:
-                cbook._warn_external(
-                    'Attempted to set non-positive top ylim on a '
-                    'log-scaled axis.\n'
-                    'Invalid limit will be ignored.')
                 top = old_top
         if bottom == top:
             cbook._warn_external(

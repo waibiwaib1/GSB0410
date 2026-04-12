@@ -1,0 +1,15 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+y = np.linspace(1000e2, 1, 100)
+x = np.exp(-np.linspace(0, 1, y.size))
+
+for yscale in ('linear', 'log'):
+    fig, ax = plt.subplots()
+    ax.plot(x, y)
+    ax.set_yscale(yscale)
+    ax.set_ylim(y.max(), y.min())
+    print(f"yscale: {yscale}")
+    print(f"  ylim: {ax.get_ylim()}")
+    print(f"  y-axis inverted: {ax.yaxis_inverted()}")
+    plt.close(fig)

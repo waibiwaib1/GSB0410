@@ -10,10 +10,11 @@ use crate::{args::Args, subject::Subject};
 #[macro_use]
 mod messages;
 
-mod app;
 mod args;
 mod config;
+mod flags;
 mod logger;
+mod parser;
 mod search;
 mod subject;
 

@@ -115,6 +115,7 @@ class Text(Artist):
                  wrap=False,
                  transform_rotates_text=False,
                  parse_math=None,    # defaults to rcParams['text.parse_math']
+                 antialiased=None,
                  **kwargs
                  ):
         """
@@ -149,6 +150,7 @@ class Text(Artist):
             transform_rotates_text=transform_rotates_text,
             linespacing=linespacing,
             rotation_mode=rotation_mode,
+            antialiased=antialiased,
         )
         self.update(kwargs)
 
@@ -167,6 +169,7 @@ class Text(Artist):
         transform_rotates_text=False,
         linespacing=None,
         rotation_mode=None,
+        antialiased=None,
     ):
         self.set_text(text)
         self.set_color(
@@ -187,6 +190,8 @@ class Text(Artist):
             linespacing = 1.2  # Maybe use rcParam later.
         self.set_linespacing(linespacing)
         self.set_rotation_mode(rotation_mode)
+        self.set_antialiased(antialiased if antialiased is not None else
+                            mpl.rcParams['text.antialiased'])
 
     def update(self, kwargs):
         # docstring inherited
@@ -322,6 +327,7 @@ class Text(Artist):
         self._transform_rotates_text = other._transform_rotates_text
         self._picker = other._picker
         self._linespacing = other._linespacing
+        self._antialiased = other._antialiased
         self.stale = True
 
     def _get_layout(self, renderer):
@@ -737,6 +743,7 @@ class Text(Artist):
             gc.set_foreground(self.get_color())
             gc.set_alpha(self.get_alpha())
             gc.set_url(self._url)
+            gc.set_antialiased(self._antialiased)
             self._set_gc_clip(gc)
 
             angle = self.get_rotation()
@@ -773,6 +780,22 @@ class Text(Artist):
     def get_color(self):
         """Return the color of the text."""
         return self._color
+
+    def get_antialiased(self):
+        """Return whether antialiased rendering is used."""
+        return self._antialiased
+
+    def set_antialiased(self, b):
+        """
+        Set whether to use antialiased rendering.
+
+        Parameters
+        ----------
+        b : bool
+        """
+        if self._antialiased != b:
+            self.stale = True
+        self._antialiased = b
 
     def get_fontproperties(self):
         """Return the `.font_manager.FontProperties`."""

@@ -34,6 +34,21 @@ impl AstAnalysis {
         analysis
     }
 
+    /// Merge multiple AstAnalysis values into one.
+    ///
+    /// This is used when combining multiple patterns, where each pattern
+    /// has been analyzed individually.
+    pub fn merge(analyses: Vec<&AstAnalysis>) -> AstAnalysis {
+        let mut merged = AstAnalysis::new();
+        for analysis in analyses {
+            merged.any_uppercase = merged.any_uppercase || analysis.any_uppercase;
+            merged.any_literal = merged.any_literal || analysis.any_literal;
+            merged.all_verbatim_literal =
+                merged.all_verbatim_literal && analysis.all_verbatim_literal;
+        }
+        merged
+    }
+
     /// Returns true if and only if a literal uppercase character occurs in
     /// the pattern.
     ///

@@ -93,6 +93,47 @@ impl Config {
         })
     }
 
+    /// Parse multiple patterns and merge them into a single HIR expression
+    /// using alternation. Each pattern is analyzed individually for smart case.
+    ///
+    /// If there was a problem parsing any of the given expressions then an
+    /// error is returned.
+    pub fn hirs<B: AsRef<str>>(
+        &self,
+        patterns: &[B],
+    ) -> Result<ConfiguredHIR, Error> {
+        if patterns.is_empty() {
+            return self.hir("");
+        }
+        if patterns.len() == 1 {
+            return self.hir(patterns[0].as_ref());
+        }
+
+        let mut hirs = vec![];
+        let mut original = String::new();
+        for (i, pat) in patterns.iter().enumerate() {
+            if i > 0 {
+                original.push('|');
+            }
+            original.push_str(pat.as_ref());
+            hirs.push(self.hir(pat.as_ref())?);
+        }
+
+        let merged_analysis = AstAnalysis::merge(
+            hirs.iter().map(|hir| &hir.analysis).collect(),
+        );
+
+        let exprs: Vec<Hir> = hirs.into_iter().map(|hir| hir.expr).collect();
+        let merged_expr = Hir::alternation(exprs);
+
+        Ok(ConfiguredHIR {
+            original,
+            config: self.clone(),
+            analysis: merged_analysis,
+            expr: merged_expr,
+        })
+    }
+
     /// Accounting for the `smart_case` config knob, return true if and only if
     /// this pattern should be matched case insensitively.
     fn is_case_insensitive(&self, analysis: &AstAnalysis) -> bool {

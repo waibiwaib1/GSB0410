@@ -50,6 +50,56 @@ impl RegexMatcherBuilder {
         })
     }
 
+    /// Compile multiple patterns into a single PCRE matcher using the
+    /// current configuration. Each pattern is analyzed individually for
+    /// smart case matching.
+    ///
+    /// When smart case is enabled, patterns that contain only lowercase
+    /// literals are wrapped in `(?i:...)` to enable case insensitive
+    /// matching for that pattern only.
+    ///
+    /// If there was a problem compiling the pattern, then an error is
+    /// returned.
+    pub fn build_many<B: AsRef<str>>(
+        &self,
+        patterns: &[B],
+    ) -> Result<RegexMatcher, Error> {
+        if patterns.is_empty() {
+            return self.build("");
+        }
+        if patterns.len() == 1 {
+            return self.build(patterns[0].as_ref());
+        }
+
+        let mut pattern_parts = vec![];
+        for pat in patterns {
+            let pat = pat.as_ref();
+            if self.case_smart && !has_uppercase_literal(pat) {
+                pattern_parts.push(format!(r"(?i:{})", pat));
+            } else {
+                pattern_parts.push(pat.to_string());
+            }
+        }
+
+        let pattern = pattern_parts.join("|");
+        let mut builder = self.builder.clone();
+        let res = if self.word {
+            let pattern = format!(r"(?<!\w)(?:{})(?!\w)", pattern);
+            builder.build(&pattern)
+        } else {
+            builder.build(&pattern)
+        };
+        res.map_err(Error::regex).map(|regex| {
+            let mut names = HashMap::new();
+            for (i, name) in regex.capture_names().iter().enumerate() {
+                if let Some(ref name) = *name {
+                    names.insert(name.to_string(), i);
+                }
+            }
+            RegexMatcher { regex, names }
+        })
+    }
+
     /// Enables case insensitive matching.
     ///
     /// If the `utf` option is also set, then Unicode case folding is used

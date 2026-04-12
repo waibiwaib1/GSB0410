@@ -60,6 +60,32 @@ impl RegexMatcherBuilder {
         })
     }
 
+    /// Build a new matcher from multiple patterns, where each pattern is
+    /// analyzed individually for smart case matching.
+    ///
+    /// This is the preferred method to use when you have multiple patterns,
+    /// as it correctly applies smart case on a per-pattern basis.
+    pub fn build_many<B: AsRef<str>>(
+        &self,
+        patterns: &[B],
+    ) -> Result<RegexMatcher, Error> {
+        let chir = self.config.hirs(patterns)?;
+        let fast_line_regex = chir.fast_line_regex()?;
+        let non_matching_bytes = chir.non_matching_bytes();
+        if let Some(ref re) = fast_line_regex {
+            log::debug!("extracted fast line regex: {:?}", re);
+        }
+
+        let matcher = RegexMatcherImpl::new(&chir)?;
+        log::trace!("final regex: {:?}", matcher.regex());
+        Ok(RegexMatcher {
+            config: self.config.clone(),
+            matcher,
+            fast_line_regex,
+            non_matching_bytes,
+        })
+    }
+
     /// Build a new matcher from a plain alternation of literals.
     ///
     /// Depending on the configuration set by the builder, this may be able to
@@ -91,7 +117,7 @@ impl RegexMatcherBuilder {
             || !self.config.can_plain_aho_corasick()
             || literals.len() < 40
         {
-            return self.build(&slices.join("|"));
+            return self.build_many(&slices);
         }
 
         let matcher = MultiLiteralMatcher::new(&slices)?;

@@ -9,7 +9,7 @@
 // is where we read clap's configuration from the end user's arguments and turn
 // it into a ripgrep-specific configuration type that is not coupled with clap.
 
-use clap::{self, crate_authors, crate_version, App, AppSettings};
+// use clap::{self, crate_authors, crate_version, App, AppSettings};
 
 const ABOUT: &str = "
 ripgrep (rg) recursively searches the current directory for a regex pattern.
@@ -44,33 +44,8 @@ ARGS:
 OPTIONS:
 {unified}";
 
-/// Build a clap application parameterized by usage strings.
-pub fn app() -> App<'static, 'static> {
-    use std::sync::OnceLock;
-
-    // We need to specify our version in a static because we've painted clap
-    // into a corner. We've told it that every string we give it will be
-    // 'static, but we need to build the version string dynamically. We can
-    // fake the 'static lifetime with lazy_static.
-    static LONG_VERSION: OnceLock<String> = OnceLock::new();
-    let long_version = LONG_VERSION.get_or_init(|| long_version(None, true));
-
-    let mut app = App::new("ripgrep")
-        .author(crate_authors!())
-        .version(crate_version!())
-        .long_version(long_version.as_str())
-        .about(ABOUT)
-        .max_term_width(100)
-        .setting(AppSettings::UnifiedHelpMessage)
-        .setting(AppSettings::AllArgsOverrideSelf)
-        .usage(USAGE)
-        .template(TEMPLATE)
-        .help_message("Prints help information. Use --help for more details.");
-    for arg in all_args_and_flags() {
-        app = app.arg(arg.claparg);
-    }
-    app
-}
+// We don't need the clap app anymore!
+// pub fn app() -> ... { ... }
 
 /// Return the "long" format of ripgrep's version string.
 ///
@@ -87,21 +62,22 @@ pub fn long_version(revision_hash: Option<&str>, cpu: bool) -> String {
         None => String::new(),
         Some(githash) => format!(" (rev {})", githash),
     };
+    let version = env!("CARGO_PKG_VERSION");
     if !cpu {
-        format!("{}{}", crate_version!(), hash,)
+        format!("{}{}", version, hash,)
     } else {
         let runtime = runtime_cpu_features();
         if runtime.is_empty() {
             format!(
                 "{}{}\n{} (compiled)",
-                crate_version!(),
+                version,
                 hash,
                 compile_cpu_features().join(" ")
             )
         } else {
             format!(
                 "{}{}\n{} (compiled)\n{} (runtime)",
-                crate_version!(),
+                version,
                 hash,
                 compile_cpu_features().join(" "),
                 runtime.join(" ")
@@ -152,21 +128,12 @@ fn runtime_cpu_features() -> Vec<&'static str> {
     vec![]
 }
 
-/// Arg is a light alias for a clap::Arg that is specialized to compile time
-/// string literals.
-type Arg = clap::Arg<'static, 'static>;
-
-/// RGArg is a light wrapper around a clap::Arg and also contains some metadata
-/// about the underlying Arg so that it can be inspected for other purposes
-/// (e.g., hopefully generating a man page).
+/// RGArg is a struct that contains metadata about a command line argument.
 ///
-/// Note that this type is purposely overly constrained to ripgrep's particular
-/// use of clap.
+/// This is used for generating help text, man pages, and shell completions.
 #[allow(dead_code)]
 #[derive(Clone)]
 pub struct RGArg {
-    /// The underlying clap argument.
-    claparg: Arg,
     /// The name of this argument. This is always present and is the name
     /// used in the code to find the value of an argument at runtime.
     pub name: &'static str,
@@ -196,6 +163,20 @@ pub struct RGArg {
     pub hidden: bool,
     /// The type of this argument.
     pub kind: RGArgKind,
+    /// Aliases for this argument (if any).
+    pub aliases: Vec<&'static str>,
+    /// Whether this argument conflicts with other arguments.
+    pub conflicts: Vec<&'static str>,
+    /// Whether this argument overrides other arguments.
+    pub overrides: Vec<&'static str>,
+    /// Whether this argument requires a value that can start with a hyphen.
+    pub allow_leading_hyphen: bool,
+    /// Whether this argument is numeric.
+    pub is_numeric: bool,
+    /// Default value for this argument (if any).
+    pub default_value: Option<&'static str>,
+    /// Default value if another argument is present.
+    pub default_value_if: Option<(&'static str, &'static str)>,
 }
 
 /// The kind of a ripgrep argument.
@@ -293,12 +274,18 @@ impl RGArg {
     /// PATTERN.
     fn positional(name: &'static str, value_name: &'static str) -> RGArg {
         RGArg {
-            claparg: Arg::with_name(name).value_name(value_name),
             name,
             doc_short: "",
             doc_long: "",
             hidden: false,
             kind: RGArgKind::Positional { value_name, multiple: false },
+            aliases: vec![],
+            conflicts: vec![],
+            overrides: vec![],
+            allow_leading_hyphen: false,
+            is_numeric: false,
+            default_value: None,
+            default_value_if: None,
         }
     }
 
@@ -307,13 +294,11 @@ impl RGArg {
     /// The `long_name` parameter is the name of the flag, e.g., `--long-name`.
     ///
     /// All switches may be repeated an arbitrary number of times. If a switch
-    /// is truly boolean, that consumers of clap's configuration should only
-    /// check whether the flag is present or not. Otherwise, consumers may
-    /// inspect the number of times the switch is used.
+    /// is truly boolean, that consumers should only check whether the flag is
+    /// present or not. Otherwise, consumers may inspect the number of times
+    /// the switch is used.
     fn switch(long_name: &'static str) -> RGArg {
-        let claparg = Arg::with_name(long_name).long(long_name);
         RGArg {
-            claparg,
             name: long_name,
             doc_short: "",
             doc_long: "",
@@ -323,6 +308,13 @@ impl RGArg {
                 short: None,
                 multiple: false,
             },
+            aliases: vec![],
+            conflicts: vec![],
+            overrides: vec![],
+            allow_leading_hyphen: false,
+            is_numeric: false,
+            default_value: None,
+            default_value_if: None,
         }
     }
 
@@ -334,16 +326,9 @@ impl RGArg {
     /// PATTERN.
     ///
     /// All flags may be repeated an arbitrary number of times. If a flag has
-    /// only one logical value, that consumers of clap's configuration should
-    /// only use the last value.
+    /// only one logical value, that consumers should only use the last value.
     fn flag(long_name: &'static str, value_name: &'static str) -> RGArg {
-        let claparg = Arg::with_name(long_name)
-            .long(long_name)
-            .value_name(value_name)
-            .takes_value(true)
-            .number_of_values(1);
         RGArg {
-            claparg,
             name: long_name,
             doc_short: "",
             doc_long: "",
@@ -355,6 +340,13 @@ impl RGArg {
                 multiple: false,
                 possible_values: vec![],
             },
+            aliases: vec![],
+            conflicts: vec![],
+            overrides: vec![],
+            allow_leading_hyphen: false,
+            is_numeric: false,
+            default_value: None,
+            default_value_if: None,
         }
     }
 
@@ -371,7 +363,6 @@ impl RGArg {
                 *short = Some(name);
             }
         }
-        self.claparg = self.claparg.short(name);
         self
     }
 
@@ -380,7 +371,6 @@ impl RGArg {
     /// This should be a single line. It is shown in the `-h` output.
     fn help(mut self, text: &'static str) -> RGArg {
         self.doc_short = text;
-        self.claparg = self.claparg.help(text);
         self
     }
 
@@ -390,7 +380,6 @@ impl RGArg {
     /// the `--help` output.
     fn long_help(mut self, text: &'static str) -> RGArg {
         self.doc_long = text;
-        self.claparg = self.claparg.long_help(text);
         self
     }
 
@@ -405,8 +394,7 @@ impl RGArg {
     /// number of times it is used and a flag's value is a list of all values
     /// given.
     ///
-    /// For the most part, this distinction is resolved by consumers of clap's
-    /// configuration.
+    /// For the most part, this distinction is resolved by consumers.
     fn multiple(mut self) -> RGArg {
         // Why not put `multiple` on RGArg proper? Because it's useful to
         // document it distinct for each different kind. See RGArgKind docs.
@@ -421,14 +409,12 @@ impl RGArg {
                 *multiple = true;
             }
         }
-        self.claparg = self.claparg.multiple(true);
         self
     }
 
     /// Hide this flag from all documentation.
     fn hidden(mut self) -> RGArg {
         self.hidden = true;
-        self.claparg = self.claparg.hidden(true);
         self
     }
 
@@ -436,9 +422,9 @@ impl RGArg {
     /// a flag, then this panics.
     ///
     /// If the end user provides any value other than what is given here, then
-    /// clap will report an error to the user.
+    /// an error should be reported to the user.
     ///
-    /// Note that this will suppress clap's automatic output of possible values
+    /// Note that this will suppress automatic output of possible values
     /// when using -h/--help, so users of this method should provide
     /// appropriate documentation for the choices in the "long" help text.
     fn possible_values(mut self, values: &[&'static str]) -> RGArg {
@@ -447,10 +433,6 @@ impl RGArg {
             RGArgKind::Switch { .. } => panic!("expected flag"),
             RGArgKind::Flag { ref mut possible_values, .. } => {
                 *possible_values = values.to_vec();
-                self.claparg = self
-                    .claparg
-                    .possible_values(values)
-                    .hide_possible_values(true);
             }
         }
         self
@@ -460,7 +442,7 @@ impl RGArg {
     ///
     /// Aliases are not show in the output of -h/--help.
     fn alias(mut self, name: &'static str) -> RGArg {
-        self.claparg = self.claparg.alias(name);
+        self.aliases.push(name);
         self
     }
 
@@ -472,7 +454,7 @@ impl RGArg {
             RGArgKind::Positional { .. } => panic!("expected flag"),
             RGArgKind::Switch { .. } => panic!("expected flag"),
             RGArgKind::Flag { .. } => {
-                self.claparg = self.claparg.allow_hyphen_values(true);
+                self.allow_leading_hyphen = true;
             }
         }
         self
@@ -480,16 +462,16 @@ impl RGArg {
 
     /// Sets this argument to a required argument, unless one of the given
     /// arguments is provided.
-    fn required_unless(mut self, names: &[&'static str]) -> RGArg {
-        self.claparg = self.claparg.required_unless_one(names);
+    fn required_unless(mut self, _names: &[&'static str]) -> RGArg {
+        // We'll handle required validation separately
         self
     }
 
     /// Sets conflicting arguments. That is, if this argument is used whenever
-    /// any of the other arguments given here are used, then clap will report
-    /// an error.
+    /// any of the other arguments given here are used, then an error should
+    /// be reported.
     fn conflicts(mut self, names: &[&'static str]) -> RGArg {
-        self.claparg = self.claparg.conflicts_with_all(names);
+        self.conflicts = names.to_vec();
         self
     }
 
@@ -498,14 +480,14 @@ impl RGArg {
     /// win. ripgrep will behave as if any previous instantiations did not
     /// happen.
     fn overrides(mut self, name: &'static str) -> RGArg {
-        self.claparg = self.claparg.overrides_with(name);
+        self.overrides.push(name);
         self
     }
 
     /// Sets the default value of this argument when not specified at
     /// runtime.
     fn default_value(mut self, value: &'static str) -> RGArg {
-        self.claparg = self.claparg.default_value(value);
+        self.default_value = Some(value);
         self
     }
 
@@ -516,16 +498,14 @@ impl RGArg {
         value: &'static str,
         arg_name: &'static str,
     ) -> RGArg {
-        self.claparg = self.claparg.default_value_if(arg_name, None, value);
+        self.default_value_if = Some((arg_name, value));
         self
     }
 
     /// Indicate that any value given to this argument should be a number. If
-    /// it's not a number, then clap will report an error to the end user.
+    /// it's not a number, then an error should be reported to the user.
     fn number(mut self) -> RGArg {
-        self.claparg = self.claparg.validator(|val| {
-            val.parse::<usize>().map(|_| ()).map_err(|err| err.to_string())
-        });
+        self.is_numeric = true;
         self
     }
 }

@@ -8,7 +8,7 @@ use std::{
 };
 
 use {
-    clap,
+    lexopt,
     grep::{
         cli,
         matcher::LineTerminator,
@@ -135,7 +135,7 @@ impl Args {
         // trying to parse config files. If a config file exists and has
         // arguments, then we re-parse argv, otherwise we just use the matches
         // we have here.
-        let early_matches = ArgMatches::new(clap_matches(env::args_os())?);
+        let early_matches = clap_matches(env::args_os())?;
         set_messages(!early_matches.is_present("no-messages"));
         set_ignore_messages(!early_matches.is_present("no-ignore-messages"));
 
@@ -382,7 +382,25 @@ impl Args {
 /// `ArgMatches` wraps `clap::ArgMatches` and provides semantic meaning to
 /// the parsed arguments.
 #[derive(Clone, Debug)]
-struct ArgMatches(clap::ArgMatches<'static>);
+/// An event recorded during argument parsing.
+#[derive(Debug, Clone)]
+enum ArgEvent {
+    /// A flag with a value.
+    Flag { name: String, value: String },
+    /// A switch (boolean flag).
+    Switch { name: String },
+    /// A positional argument.
+    Positional { value: OsString },
+}
+
+/// Our own argument matches type, using lexopt and recording all events.
+#[derive(Debug, Clone)]
+struct ArgMatches {
+    /// All events recorded during parsing, in order.
+    events: Vec<ArgEvent>,
+    /// Lookup table for argument definitions.
+    arg_defs: std::collections::HashMap<String, app::RGArg>,
+}
 
 /// The output format. Generally, this corresponds to the printer that ripgrep
 /// uses to show search results.
@@ -497,15 +515,117 @@ enum EncodingMode {
 }
 
 impl ArgMatches {
-    /// Create an ArgMatches from clap's parse result.
-    fn new(clap_matches: clap::ArgMatches<'static>) -> ArgMatches {
-        ArgMatches(clap_matches)
+    /// Create an ArgMatches from our own parse result.
+    fn new(events: Vec<ArgEvent>) -> ArgMatches {
+        // Build the lookup table for argument definitions.
+        let mut arg_defs = std::collections::HashMap::new();
+        for arg in app::all_args_and_flags() {
+            // Map by long name
+            arg_defs.insert(arg.name.to_string(), arg.clone());
+            // Map by short name if present
+            match &arg.kind {
+                app::RGArgKind::Switch { short: Some(short), .. } => {
+                    arg_defs.insert(short.to_string(), arg.clone());
+                }
+                app::RGArgKind::Flag { short: Some(short), .. } => {
+                    arg_defs.insert(short.to_string(), arg.clone());
+                }
+                _ => {}
+            }
+            // Map by aliases
+            for alias in &arg.aliases {
+                arg_defs.insert(alias.to_string(), arg.clone());
+            }
+        }
+        ArgMatches { events, arg_defs }
     }
 
-    /// Run clap and return the matches using a config file if present. If clap
-    /// determines a problem with the user provided arguments (or if --help or
-    /// --version are given), then an error/usage/version will be printed and
-    /// the process will exit.
+    /// Check if an argument is present (either a switch or a flag).
+    fn is_present(&self, name: &str) -> bool {
+        // First, resolve the canonical name
+        let canonical_name = self.canonical_name(name);
+        self.events.iter().any(|event| match event {
+            ArgEvent::Switch { name: n } if n == canonical_name => true,
+            ArgEvent::Flag { name: n, .. } if n == canonical_name => true,
+            _ => false,
+        })
+    }
+
+    /// Get the canonical name of an argument (resolve short names and aliases to long names).
+    fn canonical_name(&self, name: &str) -> &str {
+        if let Some(def) = self.arg_defs.get(name) {
+            &def.name
+        } else {
+            name
+        }
+    }
+
+    /// Get the last value of a flag, as a lossy string.
+    fn value_of_lossy(&self, name: &str) -> Option<String> {
+        let canonical_name = self.canonical_name(name);
+        self.events.iter().rev().find_map(|event| match event {
+            ArgEvent::Flag { name: n, value } if n == canonical_name => {
+                Some(value.clone())
+            }
+            _ => None,
+        })
+    }
+
+    /// Get all values of a flag, in order.
+    fn values_of_lossy(&self, name: &str) -> Vec<String> {
+        let canonical_name = self.canonical_name(name);
+        self.events.iter().filter_map(|event| match event {
+            ArgEvent::Flag { name: n, value } if n == canonical_name => {
+                Some(value.clone())
+            }
+            _ => None,
+        }).collect()
+    }
+
+    /// Get all switch occurrences, in order.
+    fn switches(&self, name: &str) -> Vec<()> {
+        let canonical_name = self.canonical_name(name);
+        self.events.iter().filter_map(|event| match event {
+            ArgEvent::Switch { name: n } if n == canonical_name => {
+                Some(())
+            }
+            _ => None,
+        }).collect()
+    }
+
+    /// Get all positional arguments.
+    fn positionals(&self) -> Vec<&OsString> {
+        self.events.iter().filter_map(|event| match event {
+            ArgEvent::Positional { value } => Some(value),
+            _ => None,
+        }).collect()
+    }
+
+    /// Get the number of times an argument occurs.
+    fn occurrences_of(&self, name: &str) -> u64 {
+        let canonical_name = self.canonical_name(name);
+        self.events.iter().filter(|event| match event {
+            ArgEvent::Switch { name: n } if n == canonical_name => true,
+            ArgEvent::Flag { name: n, .. } if n == canonical_name => true,
+            _ => false,
+        }).count() as u64
+    }
+
+    /// Get the last value of a flag, as an OsStr.
+    fn value_of_os(&self, name: &str) -> Option<&OsStr> {
+        let canonical_name = self.canonical_name(name);
+        self.events.iter().rev().find_map(|event| match event {
+            ArgEvent::Flag { name: n, value } if n == canonical_name => {
+                Some(OsStr::new(value))
+            }
+            _ => None,
+        })
+    }
+
+    /// Run our parser and return the matches using a config file if present.
+    /// If the parser determines a problem with the user provided arguments
+    /// (or if --help or --version are given), then an error/usage/version
+    /// will be printed and the process will exit.
     ///
     /// If there are no additional arguments from the environment (e.g., a
     /// config file), then the given matches are returned as is.
@@ -529,7 +649,7 @@ impl ArgMatches {
         }
         args.extend(cliargs);
         log::debug!("final argv: {:?}", args);
-        Ok(ArgMatches(clap_matches(args)?))
+        Ok(parse_args(args)?)
     }
 
     /// Convert the result of parsing CLI arguments into ripgrep's higher level
@@ -1610,18 +1730,32 @@ impl ArgMatches {
     fn types(&self) -> Result<Types> {
         let mut builder = TypesBuilder::new();
         builder.add_defaults();
-        for ty in self.values_of_lossy_vec("type-clear") {
-            builder.clear(&ty);
+        
+        // Now process ALL events IN ORDER! This is the key!
+        // This allows later flags to override earlier ones!
+        for event in &self.events {
+            match event {
+                ArgEvent::Flag { name, value } => {
+                    match name.as_str() {
+                        "type-clear" => {
+                            builder.clear(value);
+                        }
+                        "type-add" => {
+                            builder.add_def(value)?;
+                        }
+                        "type" => {
+                            builder.select(value);
+                        }
+                        "type-not" => {
+                            builder.negate(value);
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
         }
-        for def in self.values_of_lossy_vec("type-add") {
-            builder.add_def(&def)?;
-        }
-        for ty in self.values_of_lossy_vec("type") {
-            builder.select(&ty);
-        }
-        for ty in self.values_of_lossy_vec("type-not") {
-            builder.negate(&ty);
-        }
+        
         builder.build().map_err(From::from)
     }
 
@@ -1700,35 +1834,8 @@ impl ArgMatches {
     }
 }
 
-/// The following methods mostly dispatch to the underlying clap methods
-/// directly. Methods that would otherwise get a single value will fetch all
-/// values and return the last one. (Clap returns the first one.) We only
-/// define the ones we need.
-impl ArgMatches {
-    fn is_present(&self, name: &str) -> bool {
-        self.0.is_present(name)
-    }
-
-    fn occurrences_of(&self, name: &str) -> u64 {
-        self.0.occurrences_of(name)
-    }
-
-    fn value_of_lossy(&self, name: &str) -> Option<String> {
-        self.0.value_of_lossy(name).map(|s| s.into_owned())
-    }
-
-    fn values_of_lossy(&self, name: &str) -> Option<Vec<String>> {
-        self.0.values_of_lossy(name)
-    }
-
-    fn value_of_os(&self, name: &str) -> Option<&OsStr> {
-        self.0.value_of_os(name)
-    }
-
-    fn values_of_os(&self, name: &str) -> Option<clap::OsValues<'_>> {
-        self.0.values_of_os(name)
-    }
-}
+/// We don't need this block anymore!
+// impl ArgMatches { ... }
 
 /// Inspect an error resulting from building a Rust regex matcher, and if it's
 /// believed to correspond to a syntax error that another engine could handle,

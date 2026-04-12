@@ -2379,8 +2379,10 @@ class LogLocator(Locator):
         if not np.isfinite(vmin) or not np.isfinite(vmax):
             return 1, 10  # initial range, no data plotted yet
 
+        swapped = False
         if vmin > vmax:
             vmin, vmax = vmax, vmin
+            swapped = True
         if vmax <= 0:
             cbook._warn_external(
                 "Data has no positive values, and therefore cannot be "
@@ -2395,6 +2397,8 @@ class LogLocator(Locator):
         if vmin == vmax:
             vmin = _decade_less(vmin, self._base)
             vmax = _decade_greater(vmax, self._base)
+        if swapped:
+            return vmax, vmin
         return vmin, vmax
 
 

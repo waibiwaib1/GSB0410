@@ -68,12 +68,19 @@ impl AstAnalysis {
     }
 
     /// Creates a new `AstAnalysis` value with an initial configuration.
-    fn new() -> AstAnalysis {
+    pub(crate) fn new() -> AstAnalysis {
         AstAnalysis {
             any_uppercase: false,
             any_literal: false,
             all_verbatim_literal: true,
         }
+    }
+
+    pub fn combine(&mut self, other: &AstAnalysis) {
+        self.any_uppercase = self.any_uppercase || other.any_uppercase;
+        self.any_literal = self.any_literal || other.any_literal;
+        self.all_verbatim_literal =
+            self.all_verbatim_literal && other.all_verbatim_literal;
     }
 
     fn from_ast_impl(&mut self, ast: &Ast) {

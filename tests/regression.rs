@@ -1044,3 +1044,10 @@ rgtest!(r1891, |dir: Dir, mut cmd: TestCommand| {
     // happen when each match needs to be detected.
     eqnice!("1:\n2:\n2:\n", cmd.args(&["-won", "", "test"]).stdout());
 });
+
+// See: https://github.com/BurntSushi/ripgrep/issues/1791
+rgtest!(r1791_smart_case_per_pattern, |dir: Dir, mut cmd: TestCommand| {
+    dir.create("test", "foo\nFOO\nbar\nBAR\n");
+    cmd.args(&["-S", "-e", "foo", "-e", "bAr", "test"]);
+    eqnice!("foo\nFOO\nbar\n", cmd.stdout());
+});

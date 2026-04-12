@@ -690,6 +690,8 @@ impl ArgMatches {
         }
         let res = if self.is_present("fixed-strings") {
             builder.build_literals(patterns)
+        } else if self.case_smart() && patterns.len() > 1 {
+            builder.build_many(patterns)
         } else {
             builder.build(&patterns.join("|"))
         };
@@ -738,7 +740,11 @@ impl ArgMatches {
         if self.is_present("crlf") {
             builder.crlf(true);
         }
-        Ok(builder.build(&patterns.join("|"))?)
+        if self.case_smart() && patterns.len() > 1 {
+            Ok(builder.build_many(patterns)?)
+        } else {
+            Ok(builder.build(&patterns.join("|"))?)
+        }
     }
 
     /// Build a JSON printer that writes results to the given writer.

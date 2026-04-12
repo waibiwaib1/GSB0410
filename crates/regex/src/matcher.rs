@@ -60,6 +60,28 @@ impl RegexMatcherBuilder {
         })
     }
 
+    pub fn build_many(
+        &self,
+        patterns: &[String],
+    ) -> Result<RegexMatcher, Error> {
+        assert!(!patterns.is_empty());
+        let chir = self.config.hir_many(patterns)?;
+        let fast_line_regex = chir.fast_line_regex()?;
+        let non_matching_bytes = chir.non_matching_bytes();
+        if let Some(ref re) = fast_line_regex {
+            log::debug!("extracted fast line regex: {:?}", re);
+        }
+
+        let matcher = RegexMatcherImpl::new(&chir)?;
+        log::trace!("final regex: {:?}", matcher.regex());
+        Ok(RegexMatcher {
+            config: self.config.clone(),
+            matcher,
+            fast_line_regex,
+            non_matching_bytes,
+        })
+    }
+
     /// Build a new matcher from a plain alternation of literals.
     ///
     /// Depending on the configuration set by the builder, this may be able to
@@ -1029,6 +1051,17 @@ mod tests {
         let matcher =
             RegexMatcherBuilder::new().case_smart(true).build(r"aBc").unwrap();
         assert!(!matcher.is_match(b"ABC").unwrap());
+    }
+
+    // Test that smart case works per-pattern with build_many.
+    #[test]
+    fn case_smart_per_pattern() {
+        let patterns = vec!["foo".to_string(), "bAr".to_string()];
+        let matcher =
+            RegexMatcherBuilder::new().case_smart(true).build_many(&patterns).unwrap();
+        assert!(matcher.is_match(b"FOO").unwrap());
+        assert!(!matcher.is_match(b"BAR").unwrap());
+        assert!(matcher.is_match(b"bar").unwrap());
     }
 
     // Test that finding candidate lines works as expected.

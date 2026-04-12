@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use grep_matcher::{Captures, Match, Matcher};
 use pcre2::bytes::{CaptureLocations, Regex, RegexBuilder};
+use regex_syntax::ast::parse::Parser;
+use regex_syntax::ast::{Ast, Class, ClassSet, ClassSetItem};
 
 use crate::error::Error;
 
@@ -30,7 +32,7 @@ impl RegexMatcherBuilder {
     /// returned.
     pub fn build(&self, pattern: &str) -> Result<RegexMatcher, Error> {
         let mut builder = self.builder.clone();
-        if self.case_smart && !has_uppercase_literal(pattern) {
+        if self.case_smart && smart_case_should_be_insensitive(pattern) {
             builder.caseless(true);
         }
         let res = if self.word {
@@ -38,6 +40,43 @@ impl RegexMatcherBuilder {
             builder.build(&pattern)
         } else {
             builder.build(pattern)
+        };
+        res.map_err(Error::regex).map(|regex| {
+            let mut names = HashMap::new();
+            for (i, name) in regex.capture_names().iter().enumerate() {
+                if let Some(ref name) = *name {
+                    names.insert(name.to_string(), i);
+                }
+            }
+            RegexMatcher { regex, names }
+        })
+    }
+
+    pub fn build_many(
+        &self,
+        patterns: &[String],
+    ) -> Result<RegexMatcher, Error> {
+        let mut builder = self.builder.clone();
+        let processed: Vec<String> = if self.case_smart {
+            patterns
+                .iter()
+                .map(|p| {
+                    if smart_case_should_be_insensitive(p) {
+                        format!("(?i:{})", p)
+                    } else {
+                        p.to_string()
+                    }
+                })
+                .collect()
+        } else {
+            patterns.to_vec()
+        };
+        let pattern = processed.join("|");
+        let res = if self.word {
+            let pattern = format!(r"(?<!\w)(?:{})(?!\w)", pattern);
+            builder.build(&pattern)
+        } else {
+            builder.build(&pattern)
         };
         res.map_err(Error::regex).map(|regex| {
             let mut names = HashMap::new();
@@ -372,15 +411,121 @@ impl RegexCaptures {
 /// This at least lets us support the most common cases, like 'foo\w' and
 /// 'foo\S', in an intuitive manner.
 fn has_uppercase_literal(pattern: &str) -> bool {
-    let mut chars = pattern.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            chars.next();
-        } else if c.is_uppercase() {
-            return true;
+    let ast = match Parser::new().parse(pattern) {
+        Ok(ast) => ast,
+        Err(_) => {
+            let mut chars = pattern.chars();
+            while let Some(c) = chars.next() {
+                if c == '\\' {
+                    chars.next();
+                } else if c.is_uppercase() {
+                    return true;
+                }
+            }
+            return false;
+        }
+    };
+    has_uppercase_from_ast(&ast)
+}
+
+fn smart_case_should_be_insensitive(pattern: &str) -> bool {
+    let ast = match Parser::new().parse(pattern) {
+        Ok(ast) => ast,
+        Err(_) => {
+            return !has_uppercase_literal(pattern);
+        }
+    };
+    has_literal_from_ast(&ast) && !has_uppercase_from_ast(&ast)
+}
+
+fn has_uppercase_from_ast(ast: &Ast) -> bool {
+    match *ast {
+        Ast::Empty(_) => false,
+        Ast::Flags(_) => false,
+        Ast::Dot(_) => false,
+        Ast::Assertion(_) => false,
+        Ast::Literal(ref x) => x.c.is_uppercase(),
+        Ast::Class(ref x) => has_uppercase_from_class(x),
+        Ast::Repetition(ref x) => has_uppercase_from_ast(&x.ast),
+        Ast::Group(ref x) => has_uppercase_from_ast(&x.ast),
+        Ast::Alternation(ref x) => x.asts.iter().any(has_uppercase_from_ast),
+        Ast::Concat(ref x) => x.asts.iter().any(has_uppercase_from_ast),
+    }
+}
+
+fn has_uppercase_from_class(cls: &Class) -> bool {
+    match *cls {
+        Class::Unicode(_) | Class::Perl(_) => false,
+        Class::Bracketed(ref x) => has_uppercase_from_class_set(&x.kind),
+    }
+}
+
+fn has_uppercase_from_class_set(cs: &ClassSet) -> bool {
+    match *cs {
+        ClassSet::Item(ref item) => has_uppercase_from_class_set_item(item),
+        ClassSet::BinaryOp(ref x) => {
+            has_uppercase_from_class_set(&x.lhs)
+                || has_uppercase_from_class_set(&x.rhs)
         }
     }
-    false
+}
+
+fn has_uppercase_from_class_set_item(item: &ClassSetItem) -> bool {
+    match *item {
+        ClassSetItem::Empty(_)
+        | ClassSetItem::Ascii(_)
+        | ClassSetItem::Unicode(_)
+        | ClassSetItem::Perl(_) => false,
+        ClassSetItem::Literal(ref x) => x.c.is_uppercase(),
+        ClassSetItem::Range(ref x) => x.start.c.is_uppercase() || x.end.c.is_uppercase(),
+        ClassSetItem::Bracketed(ref x) => has_uppercase_from_class_set(&x.kind),
+        ClassSetItem::Union(ref x) => x.items.iter().any(has_uppercase_from_class_set_item),
+    }
+}
+
+fn has_literal_from_ast(ast: &Ast) -> bool {
+    match *ast {
+        Ast::Empty(_) => false,
+        Ast::Flags(_) => false,
+        Ast::Dot(_) => false,
+        Ast::Assertion(_) => false,
+        Ast::Literal(_) => true,
+        Ast::Class(ref x) => has_literal_from_class(x),
+        Ast::Repetition(ref x) => has_literal_from_ast(&x.ast),
+        Ast::Group(ref x) => has_literal_from_ast(&x.ast),
+        Ast::Alternation(ref x) => x.asts.iter().any(has_literal_from_ast),
+        Ast::Concat(ref x) => x.asts.iter().any(has_literal_from_ast),
+    }
+}
+
+fn has_literal_from_class(cls: &Class) -> bool {
+    match *cls {
+        Class::Unicode(_) | Class::Perl(_) => false,
+        Class::Bracketed(ref x) => has_literal_from_class_set(&x.kind),
+    }
+}
+
+fn has_literal_from_class_set(cs: &ClassSet) -> bool {
+    match *cs {
+        ClassSet::Item(ref item) => has_literal_from_class_set_item(item),
+        ClassSet::BinaryOp(ref x) => {
+            has_literal_from_class_set(&x.lhs)
+                || has_literal_from_class_set(&x.rhs)
+        }
+    }
+}
+
+fn has_literal_from_class_set_item(item: &ClassSetItem) -> bool {
+    match *item {
+        ClassSetItem::Empty(_)
+        | ClassSetItem::Ascii(_)
+        | ClassSetItem::Unicode(_)
+        | ClassSetItem::Perl(_) => false,
+        ClassSetItem::Literal(_) => true,
+        ClassSetItem::Range(_) => true,
+        ClassSetItem::Bracketed(ref x) => has_literal_from_class_set(&x.kind),
+        ClassSetItem::Union(ref x) => x.items.iter().any(has_literal_from_class_set_item),
+    }
 }
 
 #[cfg(test)]
@@ -437,6 +582,17 @@ mod tests {
         let matcher =
             RegexMatcherBuilder::new().case_smart(true).build(r"aBc").unwrap();
         assert!(!matcher.is_match(b"ABC").unwrap());
+    }
+
+    // Test that smart case works per-pattern with build_many.
+    #[test]
+    fn case_smart_per_pattern() {
+        let patterns = vec!["foo".to_string(), "bAr".to_string()];
+        let matcher =
+            RegexMatcherBuilder::new().case_smart(true).build_many(&patterns).unwrap();
+        assert!(matcher.is_match(b"FOO").unwrap());
+        assert!(!matcher.is_match(b"BAR").unwrap());
+        assert!(matcher.is_match(b"bar").unwrap());
     }
 
     // Test that finding candidate lines works as expected.

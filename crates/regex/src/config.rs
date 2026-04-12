@@ -93,6 +93,47 @@ impl Config {
         })
     }
 
+    pub fn hir_many(
+        &self,
+        patterns: &[String],
+    ) -> Result<ConfiguredHIR, Error> {
+        assert!(!patterns.is_empty());
+        if patterns.len() == 1 {
+            return self.hir(&patterns[0]);
+        }
+        let mut hirs = vec![];
+        let mut analysis = AstAnalysis::new();
+        for pattern in patterns {
+            let ast = self.ast(pattern)?;
+            let pat_analysis = self.analysis(&ast)?;
+            let case_insensitive = self.is_case_insensitive(&pat_analysis);
+            analysis.combine(&pat_analysis);
+            let expr = hir::translate::TranslatorBuilder::new()
+                .allow_invalid_utf8(true)
+                .case_insensitive(case_insensitive)
+                .multi_line(self.multi_line)
+                .dot_matches_new_line(self.dot_matches_new_line)
+                .swap_greed(self.swap_greed)
+                .unicode(self.unicode)
+                .build()
+                .translate(pattern, &ast)
+                .map_err(Error::regex)?;
+            let expr = match self.line_terminator {
+                None => expr,
+                Some(line_term) => strip_from_match(expr, line_term)?,
+            };
+            let expr = if self.crlf { crlfify(expr) } else { expr };
+            hirs.push(expr);
+        }
+        let combined = Hir::alternation(hirs);
+        Ok(ConfiguredHIR {
+            original: patterns.join("|"),
+            config: self.clone(),
+            analysis,
+            expr: combined,
+        })
+    }
+
     /// Accounting for the `smart_case` config knob, return true if and only if
     /// this pattern should be matched case insensitively.
     fn is_case_insensitive(&self, analysis: &AstAnalysis) -> bool {

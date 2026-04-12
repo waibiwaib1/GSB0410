@@ -79,6 +79,7 @@ def _get_text_metrics_with_cache_impl(
 
 @_docstring.interpd
 @_api.define_aliases({
+    "antialiased": ["aa"],
     "color": ["c"],
     "fontfamily": ["family"],
     "fontproperties": ["font", "font_properties"],
@@ -167,6 +168,7 @@ class Text(Artist):
         transform_rotates_text=False,
         linespacing=None,
         rotation_mode=None,
+        antialiased=None,
     ):
         self.set_text(text)
         self.set_color(
@@ -187,6 +189,7 @@ class Text(Artist):
             linespacing = 1.2  # Maybe use rcParam later.
         self.set_linespacing(linespacing)
         self.set_rotation_mode(rotation_mode)
+        self.set_antialiased(antialiased)
 
     def update(self, kwargs):
         # docstring inherited
@@ -737,6 +740,7 @@ class Text(Artist):
             gc.set_foreground(self.get_color())
             gc.set_alpha(self.get_alpha())
             gc.set_url(self._url)
+            gc.set_antialiased(self._antialiased)
             self._set_gc_clip(gc)
 
             angle = self.get_rotation()
@@ -769,6 +773,25 @@ class Text(Artist):
         gc.restore()
         renderer.close_group('text')
         self.stale = False
+
+    def get_antialiased(self):
+        """Return whether antialiased rendering is used."""
+        return self._antialiased
+
+    def set_antialiased(self, aa):
+        """
+        Set whether to use antialiased rendering.
+
+        Parameters
+        ----------
+        aa : bool or None
+            If ``None``, the value from the ``rcParams["text.antialiased"]``
+            will be used.
+        """
+        if aa is None:
+            aa = mpl.rcParams['text.antialiased']
+        self._antialiased = bool(aa)
+        self.stale = True
 
     def get_color(self):
         """Return the color of the text."""

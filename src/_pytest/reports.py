@@ -3,6 +3,7 @@ from typing import Optional
 
 import py
 
+from _pytest._code.code import ExceptionChainRepr
 from _pytest._code.code import ExceptionInfo
 from _pytest._code.code import ReprEntry
 from _pytest._code.code import ReprEntryNative
@@ -186,7 +187,30 @@ class BaseReport:
 
         d = self.__dict__.copy()
         if hasattr(self.longrepr, "toterminal"):
-            if hasattr(self.longrepr, "reprtraceback") and hasattr(
+            if isinstance(self.longrepr, ExceptionChainRepr):
+                chain = []
+                for reprtraceback, reprcrash, descr in self.longrepr.chain:
+                    chain.append((
+                        reprtraceback.__dict__.copy(),
+                        reprcrash.__dict__.copy() if reprcrash is not None else None,
+                        descr,
+                    ))
+                    new_entries = []
+                    for entry in chain[-1][0]["reprentries"]:
+                        entry_data = {
+                            "type": type(entry).__name__,
+                            "data": entry.__dict__.copy(),
+                        }
+                        for key, value in entry_data["data"].items():
+                            if hasattr(value, "__dict__"):
+                                entry_data["data"][key] = value.__dict__.copy()
+                        new_entries.append(entry_data)
+                    chain[-1][0]["reprentries"] = new_entries
+                d["longrepr"] = {
+                    "chain": chain,
+                    "sections": self.longrepr.sections,
+                }
+            elif hasattr(self.longrepr, "reprtraceback") and hasattr(
                 self.longrepr, "reprcrash"
             ):
                 d["longrepr"] = disassembled_report(self)
@@ -254,6 +278,51 @@ class BaseReport:
                     reprtraceback=ReprTraceback(**reprtraceback),
                     reprcrash=ReprFileLocation(**reprcrash),
                 )
+
+                for section in reportdict["longrepr"]["sections"]:
+                    exception_info.addsection(*section)
+                reportdict["longrepr"] = exception_info
+
+            elif "chain" in reportdict["longrepr"]:
+                chain = []
+                for chain_data in reportdict["longrepr"]["chain"]:
+                    reprtraceback, reprcrash, descr = chain_data
+                    unserialized_entries = []
+                    for entry_data in reprtraceback["reprentries"]:
+                        data = entry_data["data"]
+                        entry_type = entry_data["type"]
+                        if entry_type == "ReprEntry":
+                            reprfuncargs = None
+                            reprfileloc = None
+                            reprlocals = None
+                            if data["reprfuncargs"]:
+                                reprfuncargs = ReprFuncArgs(**data["reprfuncargs"])
+                            if data["reprfileloc"]:
+                                reprfileloc = ReprFileLocation(**data["reprfileloc"])
+                            if data["reprlocals"]:
+                                reprlocals = ReprLocals(data["reprlocals"]["lines"])
+
+                            reprentry = ReprEntry(
+                                lines=data["lines"],
+                                reprfuncargs=reprfuncargs,
+                                reprlocals=reprlocals,
+                                filelocrepr=reprfileloc,
+                                style=data["style"],
+                            )
+                        elif entry_type == "ReprEntryNative":
+                            reprentry = ReprEntryNative(data["lines"])
+                        else:
+                            _report_unserialization_failure(entry_type, cls, reportdict)
+                        unserialized_entries.append(reprentry)
+                    reprtraceback["reprentries"] = unserialized_entries
+
+                    chain.append((
+                        ReprTraceback(**reprtraceback),
+                        ReprFileLocation(**reprcrash) if reprcrash is not None else None,
+                        descr,
+                    ))
+
+                exception_info = ExceptionChainRepr(chain)
 
                 for section in reportdict["longrepr"]["sections"]:
                     exception_info.addsection(*section)

@@ -1,4 +1,5 @@
 import pytest
+from _pytest._code.code import ExceptionChainRepr
 from _pytest.pathlib import Path
 from _pytest.reports import CollectReport
 from _pytest.reports import TestReport
@@ -241,6 +242,64 @@ class TestReportSerialization:
             RuntimeError, match="INTERNALERROR: Unknown entry type returned: Unknown"
         ):
             TestReport._from_json(data)
+
+    def test_chained_exceptions_serialization(self, testdir):
+        testdir.makepyfile(
+            """
+            def test_chained():
+                try:
+                    try:
+                        raise ValueError(11)
+                    except Exception as e1:
+                        raise ValueError(12) from e1
+                except Exception as e2:
+                    raise ValueError(13) from e2
+        """
+        )
+        reprec = testdir.inline_run("-p", "no:anyio", "--assert=plain")
+        reports = reprec.getreports("pytest_runtest_logreport")
+        assert len(reports) == 3
+        rep = reports[1]
+        assert rep.failed
+        assert isinstance(rep.longrepr, ExceptionChainRepr)
+        d = rep._to_json()
+        a = TestReport._from_json(d)
+        assert isinstance(a.longrepr, ExceptionChainRepr)
+        assert len(a.longrepr.chain) == len(rep.longrepr.chain)
+        assert rep.longrepr.reprcrash.lineno == a.longrepr.reprcrash.lineno
+        assert rep.longrepr.reprcrash.message == a.longrepr.reprcrash.message
+        assert rep.longrepr.reprcrash.path == a.longrepr.reprcrash.path
+        assert rep.longrepr.sections == a.longrepr.sections
+        for i in range(len(rep.longrepr.chain)):
+            rep_tb, rep_crash, rep_descr = rep.longrepr.chain[i]
+            a_tb, a_crash, a_descr = a.longrepr.chain[i]
+            assert rep_descr == a_descr
+            assert rep_crash.lineno == a_crash.lineno
+            assert rep_crash.message == a_crash.message
+            assert rep_crash.path == a_crash.path
+        assert rep.longreprtext == a.longreprtext
+
+    def test_chained_exceptions_without_from_serialization(self, testdir):
+        testdir.makepyfile(
+            """
+            def test_chained_without_from():
+                try:
+                    raise ValueError(21)
+                except Exception:
+                    raise ValueError(22)
+        """
+        )
+        reprec = testdir.inline_run("-p", "no:anyio", "--assert=plain")
+        reports = reprec.getreports("pytest_runtest_logreport")
+        assert len(reports) == 3
+        rep = reports[1]
+        assert rep.failed
+        assert isinstance(rep.longrepr, ExceptionChainRepr)
+        d = rep._to_json()
+        a = TestReport._from_json(d)
+        assert isinstance(a.longrepr, ExceptionChainRepr)
+        assert len(a.longrepr.chain) == len(rep.longrepr.chain)
+        assert rep.longreprtext == a.longreprtext
 
 
 class TestHooks:
